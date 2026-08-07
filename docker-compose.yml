@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ai_nft_marketplace
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    ports:
+      - "4022:4022"
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3001:3000"
+    environment:
+      - NEXT_PUBLIC_BACKEND_URL=http://localhost:4022
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:

@@ -1,0 +1,21 @@
+{
+  "name": "ai-nft-marketplace-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "^15.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "//": "No wagmi/viem here on purpose — this frontend is read-only for humans (browse NFTs, listings, communities). No wallet-connect, no write actions. Agents interact exclusively through the x402 API / MCP tools in backend/, never through this frontend.",
+  "devDependencies": {
+    "@types/node": "20.17.6",
+    "@types/react": "19.2.18",
+    "typescript": "5.8.2"
+  }
+}

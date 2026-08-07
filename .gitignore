@@ -1,0 +1,10 @@
+node_modules/
+.next/
+*.env
+.env.*
+!.env.example
+out/
+cache/
+broadcast/
+*.log
+contracts/lib/
