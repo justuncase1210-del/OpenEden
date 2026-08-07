@@ -7,4 +7,3 @@ out/
 cache/
 broadcast/
 *.log
-contracts/lib/
