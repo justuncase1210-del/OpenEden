@@ -23,14 +23,39 @@ export default function CollectionAboutPage() {
 
   const [collection, setCollection] = useState<Collection | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showVerifyForm, setShowVerifyForm] = useState(false);
+  const [secretInput, setSecretInput] = useState("");
+  const [verifyMsg, setVerifyMsg] = useState("");
 
-  useEffect(() => {
+  function load() {
     fetch(`${BACKEND_URL}/api/collections/${collectionId}`)
       .then((r) => r.json())
       .then(setCollection)
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, [collectionId]);
+  }
+
+  useEffect(() => { load(); }, [collectionId]);
+
+  async function handleVerify() {
+    if (!secretInput) return;
+    setVerifyMsg("Working...");
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/collections/${collectionId}/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Admin-Secret": secretInput },
+        body: JSON.stringify({ verified: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setVerifyMsg(`Failed: ${data.error}`); return; }
+      setVerifyMsg("Verified!");
+      setSecretInput("");
+      setShowVerifyForm(false);
+      load();
+    } catch (err) {
+      setVerifyMsg("Request failed.");
+    }
+  }
 
   if (loading) return <p className="muted">Loading...</p>;
   if (!collection) return <p className="muted">Collection not found.</p>;
@@ -74,7 +99,37 @@ export default function CollectionAboutPage() {
         </div>
       </div>
 
-      <p className="muted" style={{ fontSize: "0.78rem", marginTop: "1.5rem" }}>Collections don't have a description field yet - this is every real field that actually exists, nothing invented.</p>
+      {!collection.verified && !showVerifyForm && (
+        <button
+          onClick={() => setShowVerifyForm(true)}
+          style={{ marginTop: "1.5rem", background: "transparent", border: "1px solid var(--amber)", color: "var(--amber)", borderRadius: "3px", padding: "0.5rem 1rem", fontFamily: "var(--font-mono)", fontSize: "0.78rem", cursor: "pointer" }}
+        >
+          Admin: verify this collection
+        </button>
+      )}
+
+      {showVerifyForm && (
+        <div style={{ marginTop: "1.5rem", display: "flex", gap: "0.6rem", alignItems: "center" }}>
+          <input
+            type="password"
+            value={secretInput}
+            onChange={(e) => setSecretInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleVerify()}
+            placeholder="Admin secret"
+            autoFocus
+            style={{ background: "var(--ink-raised)", border: "1px solid var(--slate-dim)", borderRadius: "3px", padding: "0.5rem 0.7rem", color: "var(--bone)", fontFamily: "var(--font-mono)", fontSize: "0.8rem", flex: 1 }}
+          />
+          <button
+            onClick={handleVerify}
+            style={{ background: "var(--amber)", color: "var(--ink)", border: "none", borderRadius: "3px", padding: "0.5rem 1rem", fontFamily: "var(--font-mono)", fontSize: "0.78rem", cursor: "pointer" }}
+          >
+            Confirm
+          </button>
+        </div>
+      )}
+      {verifyMsg && <p className="muted" style={{ fontSize: "0.78rem", marginTop: "0.75rem" }}>{verifyMsg}</p>}
+
+      <p className="muted" style={{ fontSize: "0.78rem", marginTop: "1.5rem" }}>Collections don&apos;t have a description field yet - this is every real field that actually exists, nothing invented.</p>
     </div>
   );
 }

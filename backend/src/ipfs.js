@@ -1,12 +1,10 @@
 import { config } from "./config.js";
 
 const PINATA_PIN_JSON_URL = "https://api.pinata.cloud/pinning/pinJSONToIPFS";
+const FILEBASE_PIN_URL = "https://api.filebase.io/v1/ipfs/pins";
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 500;
 
-/// Basic sanity check, not a full CID parser — catches "Pinata returned
-/// something that clearly isn't a CID" (empty string, error text,
-/// truncated response), not a guarantee of correctness.
 function looksLikeValidCid(cid) {
   if (typeof cid !== "string" || cid.length === 0) return false;
   const isV0 = /^Qm[1-9A-HJ-NP-Za-km-z]{44}$/.test(cid);
@@ -14,10 +12,6 @@ function looksLikeValidCid(cid) {
   return isV0 || isV1;
 }
 
-/// Validates metadata BEFORE attempting to pin — rejecting bad input
-/// here is cheap; a bad pin can't be un-minted once an agent uses the
-/// resulting tokenURI. Field names match the OpenSea metadata standard,
-/// since that's what wallets/marketplaces expect.
 export function validateMetadataSchema({ name, description, image, attributes }) {
   const errors = [];
   if (typeof name !== "string" || name.length === 0) errors.push("name must be a non-empty string");
@@ -49,9 +43,35 @@ export function validateMetadataSchema({ name, description, image, attributes })
   return errors;
 }
 
-/// Pins validated metadata to IPFS via Pinata, retrying on transient
-/// failures (network errors, 5xx, rate limits) — not on 4xx auth/
-/// validation errors, which won't be fixed by retrying.
+/// Pins the SAME CID Pinata already produced to Filebase too — a real
+/// mirror of the exact same content-address, not just a second upload of
+/// the same bytes (which could produce a DIFFERENT CID if the two
+/// services wrap content differently, defeating the point of
+/// redundancy). Deliberately fire-and-forget, non-blocking: if this
+/// fails, the primary Pinata pin is still completely valid and minting
+/// should not be held up waiting on a backup copy.
+async function backupPinToFilebase(cid) {
+  if (!config.ipfs.filebaseToken) {
+    console.warn(`[ipfs] FILEBASE_PINNING_TOKEN not configured — skipping backup pin for ${cid}. Pinata remains a single point of failure until this is set.`);
+    return;
+  }
+  try {
+    const res = await fetch(FILEBASE_PIN_URL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${config.ipfs.filebaseToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ cid, name: `openeden-${cid}` }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`HTTP ${res.status} ${text}`);
+    }
+    console.log(`[ipfs] backup-pinned ${cid} to Filebase`);
+  } catch (err) {
+    console.warn(`[ipfs] Filebase backup pin failed for ${cid} (non-blocking, Pinata copy still valid):`, err.message);
+  }
+}
+
 export async function pinMetadataToIpfs(metadata) {
   if (!config.ipfs.pinataJwt) {
     throw new Error("PINATA_JWT not configured — cannot pin metadata");
@@ -84,7 +104,10 @@ export async function pinMetadataToIpfs(metadata) {
         throw Object.assign(new Error(`Pinata returned a response without a valid-looking CID: ${JSON.stringify(data)}`), { permanent: true });
       }
 
-      return { cid: data.IpfsHash, tokenUri: `ipfs://${data.IpfsHash}` };
+      const cid = data.IpfsHash;
+      backupPinToFilebase(cid); // deliberately not awaited — see comment above
+
+      return { cid, tokenUri: `ipfs://${cid}` };
     } catch (err) {
       lastError = err;
       if (err.permanent || attempt === MAX_RETRIES) break;

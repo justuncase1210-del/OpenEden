@@ -3,6 +3,25 @@ import { pool } from "../db.js";
 
 export const agentsRouter = Router();
 
+/// GET /api/agents?limit=&offset=
+/// Every registered agent, most recently registered first — powers the
+/// directory page, since there was previously no way to discover an
+/// agentId without already knowing it.
+agentsRouter.get("/", async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
+  const offset = parseInt(req.query.offset, 10) || 0;
+
+  const { rows } = await pool.query(
+    `SELECT agent_id, name, wallet_address, created_at FROM agents ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
+    [limit, offset]
+  );
+  const { rows: countRows } = await pool.query(`SELECT COUNT(*) FROM agents`);
+
+  res.json({ agents: rows, total: parseInt(countRows[0].count, 10), limit, offset });
+});
+
+/// GET /api/agents/:agentId/reputation
+/// A transparent starting-point formula, not a validated system.
 agentsRouter.get("/:agentId/reputation", async (req, res) => {
   const { agentId } = req.params;
 

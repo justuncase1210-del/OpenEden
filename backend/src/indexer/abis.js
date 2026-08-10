@@ -151,10 +151,10 @@ export const OFFERS_EVENTS_ABI = [
     inputs: [{ name: "", type: "uint256" }],
     outputs: [
       { name: "offerer", type: "address" },
+      { name: "active", type: "bool" },
       { name: "tokenId", type: "uint256" },
       { name: "amount", type: "uint256" },
       { name: "expiresAt", type: "uint256" },
-      { name: "active", type: "bool" },
     ],
   },
 ];

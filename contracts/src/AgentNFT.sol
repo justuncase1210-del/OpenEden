@@ -7,56 +7,19 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ERC2981} from "@openzeppelin/contracts/token/common/ERC2981.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {AgentRegistry} from "./AgentRegistry.sol";
 
-/// @notice Minimal interface for reading Marketplace's fee config — kept
-///         separate to avoid a circular import. mint() reads the SAME
-///         feeBps/feeRecipient Marketplace already uses for trades,
-///         rather than duplicating a second fee number that could drift
-///         out of sync with it.
 interface IMarketplaceFeeInfo {
     function feeBps() external view returns (uint96);
     function feeRecipient() external view returns (address);
 }
 
 /// @title AgentNFT
-/// @notice ERC-721 collection for NFTs minted by AI agents. Each token
-///         stores a metadata URI (JSON pinned to IPFS — see the backend's
-///         /api/nfts/prepare-metadata) and an optional per-token creator
-///         royalty via ERC-2981.
-/// @dev One shared CONTRACT for the whole marketplace, but tokens are
-///      grouped into agent-created COLLECTIONS within it (a `Collection`
-///      struct, not a separate deployed contract per collection) —
-///      similar to how OpenSea's shared storefront works, but with real
-///      per-collection supply caps and mint phases rather than one flat
-///      token pool.
-///
-/// @dev COLLECTIONS, SUPPLY CAPS, AND MINT PHASES: an agent calls
-///      `createCollection(maxSupply)` to start one (maxSupply capped at
-///      MAX_COLLECTION_SUPPLY = 10,000) — no limit on how many
-///      collections one agent can create (beyond the anti-spam cooldown
-///      between creations). A collection's creator is a CURATOR, not a
-///      minter: they define the theme and supply cap but CANNOT mint
-///      into their own collection — only OTHER registered agents can,
-///      and each minter owns whatever they personally mint.
-///
-/// @dev MINT PRICING (NEW): a curator can optionally call
-///      `setMintPrice(collectionId, priceUsdc)` any time after creating
-///      a collection. Defaults to 0 (free — unchanged from before this
-///      was added). If a price is set, `mint()` pulls that much USDC
-///      from the MINTER (not the curator), splits it using Marketplace's
-///      existing fee rate (2.5% by default) to the platform, the rest to
-///      the curator. REQUIRES the minter to have called
-///      `usdc.approve(address(agentNFT), price)` beforehand — same
-///      approve-then-call pattern as Marketplace.buy(), easy to forget
-///      if you're integrating without reading this comment.
-///
-/// @dev MINTING IS AGENT-SELF-SERVICE, NOT RELAYER-EXECUTED. Agents sign
-///      their own mint transaction with their own wallet (and their own
-///      Base Sepolia ETH for gas, plus USDC if the collection is priced).
-///      The backend's role narrows to: pin metadata to IPFS and hand back
-///      a tokenURI, nothing more.
+/// @notice ERC-721 collection for NFTs minted by AI agents.
 contract AgentNFT is ERC721URIStorage, ERC2981, Ownable, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
     uint256 private _nextTokenId;
     uint256 private _nextCollectionId = 1;
 
@@ -65,24 +28,14 @@ contract AgentNFT is ERC721URIStorage, ERC2981, Ownable, ReentrancyGuard {
 
     struct Collection {
         address creator;
+        bool mintEndedManually;
         string creatorAgentId;
         uint256 maxSupply;
         uint256 mintedCount;
-        bool mintEndedManually;
-        uint256 mintPriceUsdc; // NEW — appended at the end, not inserted
-                                // in the middle, to keep every EXISTING
-                                // field's position unchanged in the
-                                // auto-generated collections() getter.
-                                // Still changes the tuple's total length
-                                // though — any code destructuring it
-                                // needs one more value added at the end.
+        uint256 mintPriceUsdc;
     }
 
     uint256 public constant MAX_COLLECTION_SUPPLY = 10_000;
-
-    /// @notice Sanity ceiling on mint price — NOT a meaningful business
-    ///         limit, just a guard against a curator fat-fingering an
-    ///         extra zero or two. $1,000,000 USDC (6 decimals).
     uint256 public constant MAX_SANE_MINT_PRICE = 1_000_000 * 1e6;
 
     mapping(uint256 => Collection) public collections;
@@ -112,6 +65,14 @@ contract AgentNFT is ERC721URIStorage, ERC2981, Ownable, ReentrancyGuard {
     error CollectionSoldOut();
     error MintAlreadyEnded();
     error MintPriceTooHigh();
+    error PriceExceedsMax();
+    /// @notice Thrown when a critical address parameter is the zero
+    ///         address — found by an automated static analysis pass
+    ///         (Slither). Without this, accidentally setting marketplace
+    ///         to address(0) would silently disable every function
+    ///         gated by onlyMarketplace, with no error to catch the
+    ///         mistake at the time it happens.
+    error ZeroAddress();
 
     uint96 public constant MAX_ROYALTY_BPS = 1000;
     uint256 public constant MIN_MINT_INTERVAL = 10 seconds;
@@ -140,6 +101,7 @@ contract AgentNFT is ERC721URIStorage, ERC2981, Ownable, ReentrancyGuard {
     }
 
     function setMarketplace(address _marketplace) external onlyOwner {
+        if (_marketplace == address(0)) revert ZeroAddress();
         marketplace = _marketplace;
         emit MarketplaceUpdated(_marketplace);
     }
@@ -160,19 +122,16 @@ contract AgentNFT is ERC721URIStorage, ERC2981, Ownable, ReentrancyGuard {
         string memory agentId = agentRegistry.agentIdOf(msg.sender);
         collections[collectionId] = Collection({
             creator: msg.sender,
+            mintEndedManually: false,
             creatorAgentId: agentId,
             maxSupply: maxSupply,
             mintedCount: 0,
-            mintEndedManually: false,
-            mintPriceUsdc: 0 // free by default — unchanged behavior unless the curator opts in
+            mintPriceUsdc: 0
         });
 
         emit CollectionCreated(collectionId, msg.sender, agentId, maxSupply);
     }
 
-    /// @notice Set (or change) what OTHER agents must pay in USDC to mint
-    ///         into your collection. 0 = free. Curator-only, callable at
-    ///         any time — including mid-mint-phase, to adjust pricing.
     function setMintPrice(uint256 collectionId, uint256 priceUsdc) external {
         Collection storage collection = collections[collectionId];
         if (collection.creator == address(0)) revert CollectionDoesNotExist();
@@ -193,13 +152,7 @@ contract AgentNFT is ERC721URIStorage, ERC2981, Ownable, ReentrancyGuard {
         emit MintEnded(collectionId);
     }
 
-    /// @notice Mint a new NFT into `collectionId`, to yourself. If the
-    ///         collection has a mint price set, this pulls that much
-    ///         USDC from YOU (the minter) — approve this contract for
-    ///         that amount first, or this reverts on the transferFrom.
-    ///         Split: Marketplace's current feeBps to the platform, the
-    ///         rest to the collection's curator.
-    function mint(uint256 collectionId, string calldata uri, address royaltyReceiver, uint96 royaltyBps)
+    function mint(uint256 collectionId, string calldata uri, address royaltyReceiver, uint96 royaltyBps, uint256 maxPriceUsdc)
         external
         onlyAgent
         nonReentrant
@@ -215,11 +168,9 @@ contract AgentNFT is ERC721URIStorage, ERC2981, Ownable, ReentrancyGuard {
         if (block.timestamp < lastMintAt[msg.sender] + MIN_MINT_INTERVAL) revert MintTooSoon();
         lastMintAt[msg.sender] = block.timestamp;
 
-        // Mint fee, if this collection has one — pulled BEFORE the NFT
-        // is minted, so a failed payment never leaves a half-completed
-        // mint. Reads Marketplace's live fee rate rather than a second,
-        // separately-tracked number.
         uint256 price = collection.mintPriceUsdc;
+        if (price > maxPriceUsdc) revert PriceExceedsMax();
+
         if (price > 0) {
             uint96 platformFeeBps = 0;
             address platformFeeRecipient = address(0);
@@ -230,8 +181,8 @@ contract AgentNFT is ERC721URIStorage, ERC2981, Ownable, ReentrancyGuard {
             uint256 platformFee = (price * platformFeeBps) / 10_000;
             uint256 curatorProceeds = price - platformFee;
 
-            usdc.transferFrom(msg.sender, collection.creator, curatorProceeds);
-            if (platformFee > 0) usdc.transferFrom(msg.sender, platformFeeRecipient, platformFee);
+            usdc.safeTransferFrom(msg.sender, collection.creator, curatorProceeds);
+            if (platformFee > 0) usdc.safeTransferFrom(msg.sender, platformFeeRecipient, platformFee);
         }
 
         collection.mintedCount += 1;

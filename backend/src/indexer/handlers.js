@@ -165,7 +165,7 @@ export async function handleOfferCancelled({ offerId }) {
 /// the contract's own `offers` mapping via the ABI's read function,
 /// mirroring resolveSlugFromHash's pattern above.
 export async function handleOfferAccepted({ offerId, accepter }) {
-  const [, tokenId] = await publicClient.readContract({
+  const [, , tokenId] = await publicClient.readContract({
     address: config.chain.offersContractAddress,
     abi: OFFERS_EVENTS_ABI,
     functionName: "offers",

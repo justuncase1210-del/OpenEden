@@ -24,21 +24,19 @@ contract OffersTest is Test {
     address deployer = address(0xA11CE);
     address feeRecipient = address(0xFEE);
     address curator = address(0xC0);
-    address owner_ = makeAddr("owner"); // current token owner / offer accepter
+    address owner_ = makeAddr("owner");
     address offerer = makeAddr("offerer");
     address randomWallet = address(0xBAD);
 
-    uint256 constant OFFER_AMOUNT = 8_000_000; // 8 USDC (6dp)
+    uint256 constant OFFER_AMOUNT = 8_000_000;
+    uint256 constant NO_MAX = type(uint256).max;
     uint256 tokenId;
 
     function setUp() public {
         vm.warp(100);
         vm.startPrank(deployer);
         registry = new AgentRegistry(deployer);
-        usdc = new MockUSDC(); // MUST come before AgentNFT's constructor —
-                                // it takes usdc's address as a parameter;
-                                // constructing it after would silently
-                                // wire AgentNFT to address(0) instead.
+        usdc = new MockUSDC();
         nft = new AgentNFT(deployer, address(registry), address(usdc));
         marketplace = new Marketplace(deployer, address(usdc), feeRecipient, address(registry), address(nft));
         nft.setMarketplace(address(marketplace));
@@ -54,18 +52,16 @@ contract OffersTest is Test {
         uint256 collectionId = nft.createCollection(10);
 
         vm.startPrank(owner_);
-        tokenId = nft.mint(collectionId, "ipfs://example", address(0), 0);
+        tokenId = nft.mint(collectionId, "ipfs://example", address(0), 0, NO_MAX);
         vm.stopPrank();
 
         vm.prank(curator);
-        nft.endMint(collectionId); // mint phase ended — offers can be accepted
+        nft.endMint(collectionId);
 
-        usdc.mint(offerer, 1_000_000_000); // plenty of USDC for many offers
+        usdc.mint(offerer, 1_000_000_000);
         vm.prank(offerer);
         usdc.approve(address(offersContract), type(uint256).max);
     }
-
-    // --- makeOffer: escrow ---
 
     function test_MakeOfferEscrowsUsdc() public {
         uint256 offererBalanceBefore = usdc.balanceOf(offerer);
@@ -76,7 +72,7 @@ contract OffersTest is Test {
         assertEq(usdc.balanceOf(offerer), offererBalanceBefore - OFFER_AMOUNT);
         assertEq(usdc.balanceOf(address(offersContract)), OFFER_AMOUNT);
 
-        (address offerAddr, uint256 offerTokenId, uint256 amount, , bool active) = offersContract.offers(offerId);
+        (address offerAddr, bool active, uint256 offerTokenId, uint256 amount, ) = offersContract.offers(offerId);
         assertEq(offerAddr, offerer);
         assertEq(offerTokenId, tokenId);
         assertEq(amount, OFFER_AMOUNT);
@@ -101,8 +97,6 @@ contract OffersTest is Test {
         offersContract.makeOffer(tokenId, OFFER_AMOUNT, 31 days);
     }
 
-    // --- cancelOffer ---
-
     function test_CancelOfferRefundsEscrow() public {
         vm.prank(offerer);
         uint256 offerId = offersContract.makeOffer(tokenId, OFFER_AMOUNT, 7 days);
@@ -112,7 +106,7 @@ contract OffersTest is Test {
         offersContract.cancelOffer(offerId);
 
         assertEq(usdc.balanceOf(offerer), balanceBeforeCancel + OFFER_AMOUNT);
-        (, , , , bool active) = offersContract.offers(offerId);
+        (, bool active, , , ) = offersContract.offers(offerId);
         assertFalse(active);
     }
 
@@ -135,11 +129,9 @@ contract OffersTest is Test {
         vm.prank(offerer);
         offersContract.cancelOffer(offerId);
 
-        (, , , , bool active) = offersContract.offers(offerId);
+        (, bool active, , , ) = offersContract.offers(offerId);
         assertFalse(active);
     }
-
-    // --- acceptOffer: happy path + fee/royalty math ---
 
     function test_AcceptOfferTransfersNftAndSplitsPaymentNoRoyalty() public {
         vm.prank(offerer);
@@ -166,7 +158,7 @@ contract OffersTest is Test {
         uint256 collectionId = nft.createCollection(10);
 
         vm.startPrank(owner_);
-        uint256 royaltyTokenId = nft.mint(collectionId, "ipfs://with-royalty", royaltyReceiver, 500);
+        uint256 royaltyTokenId = nft.mint(collectionId, "ipfs://with-royalty", royaltyReceiver, 500, NO_MAX);
         vm.stopPrank();
 
         vm.prank(curator);
@@ -216,7 +208,7 @@ contract OffersTest is Test {
         uint256 collectionId = nft.createCollection(10);
 
         vm.startPrank(owner_);
-        uint256 activeTokenId = nft.mint(collectionId, "ipfs://still-minting", address(0), 0);
+        uint256 activeTokenId = nft.mint(collectionId, "ipfs://still-minting", address(0), 0, NO_MAX);
         vm.stopPrank();
 
         vm.prank(offerer);
@@ -226,8 +218,6 @@ contract OffersTest is Test {
         vm.expectRevert(Offers.MintNotEnded.selector);
         offersContract.acceptOffer(offerId);
     }
-
-    // --- Stale-offer invalidation via ownership, and inheritance by a new owner ---
 
     function test_RevertWhen_OriginalOwnerAcceptsAfterSellingElsewhere() public {
         vm.prank(offerer);
@@ -275,8 +265,6 @@ contract OffersTest is Test {
         assertEq(nft.ownerOf(tokenId), offerer);
     }
 
-    // --- Shared daily action cap with Marketplace ---
-
     function test_MakeOfferAndListShareTheSameDailyCounter() public {
         vm.prank(owner_);
         nft.approve(address(marketplace), tokenId);
@@ -289,7 +277,7 @@ contract OffersTest is Test {
         vm.prank(curator);
         uint256 collectionId = nft.createCollection(10);
         vm.prank(offerer);
-        uint256 secondTokenId = nft.mint(collectionId, "ipfs://second", address(0), 0);
+        uint256 secondTokenId = nft.mint(collectionId, "ipfs://second", address(0), 0, NO_MAX);
         vm.prank(curator);
         nft.endMint(collectionId);
 
@@ -311,7 +299,7 @@ contract OffersTest is Test {
         for (uint256 i = 0; i < 9; i++) {
             vm.warp(block.timestamp + nft.MIN_MINT_INTERVAL());
             vm.prank(owner_);
-            ids[i] = nft.mint(collectionId, "ipfs://batch", address(0), 0);
+            ids[i] = nft.mint(collectionId, "ipfs://batch", address(0), 0, NO_MAX);
         }
 
         vm.prank(curator);
@@ -340,7 +328,7 @@ contract OffersTest is Test {
         vm.prank(owner_);
         uint256 secondCollectionId = nft.createCollection(5);
         vm.prank(offerer);
-        uint256 anotherTokenId = nft.mint(secondCollectionId, "ipfs://another", address(0), 0);
+        uint256 anotherTokenId = nft.mint(secondCollectionId, "ipfs://another", address(0), 0, NO_MAX);
         vm.prank(owner_);
         nft.endMint(secondCollectionId);
 
@@ -348,8 +336,6 @@ contract OffersTest is Test {
         vm.expectRevert(Marketplace.DailyActionLimitReached.selector);
         offersContract.makeOffer(anotherTokenId, OFFER_AMOUNT, 7 days);
     }
-
-    // --- Pausable / emergency controls ---
 
     function test_RevertWhen_MakingOfferWhilePaused() public {
         vm.prank(deployer);
@@ -370,7 +356,7 @@ contract OffersTest is Test {
         vm.prank(offerer);
         offersContract.cancelOffer(offerId);
 
-        (, , , , bool active) = offersContract.offers(offerId);
+        (, bool active, , , ) = offersContract.offers(offerId);
         assertFalse(active);
     }
 
@@ -382,7 +368,7 @@ contract OffersTest is Test {
 
         vm.prank(offerer);
         uint256 offerId = offersContract.makeOffer(tokenId, OFFER_AMOUNT, 7 days);
-        (, , , , bool active) = offersContract.offers(offerId);
+        (, bool active, , , ) = offersContract.offers(offerId);
         assertTrue(active);
     }
 
@@ -409,8 +395,6 @@ contract OffersTest is Test {
         offersContract.emergencyWithdrawUsdc(offerer, 1);
     }
 
-    // --- Fuzz test ---
-
     function testFuzz_MakeThenCancelOfferAlwaysReturnsExactAmount(uint256 amount) public {
         amount = bound(amount, 1, 1_000_000_000);
         usdc.mint(offerer, amount);
@@ -425,5 +409,9 @@ contract OffersTest is Test {
         vm.prank(offerer);
         offersContract.cancelOffer(offerId);
         assertEq(usdc.balanceOf(offerer), balanceBefore);
+    }
+    function test_RevertWhen_ConstructedWithZeroMarketplace() public {
+        vm.expectRevert(Offers.ZeroAddress.selector);
+        new Offers(deployer, address(usdc), address(registry), address(nft), address(0));
     }
 }

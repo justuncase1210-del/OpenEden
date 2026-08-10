@@ -14,20 +14,13 @@ contract MockUSDC is ERC20 {
     function mint(address to, uint256 amount) external { _mint(to, amount); }
 }
 
-/// A "handler" contract — Foundry's invariant fuzzer calls these public
-/// functions randomly, in random order, many times in a row, then checks
-/// the invariant after each sequence. It only calls makeOffer/cancelOffer
-/// here (not acceptOffer) deliberately — this specific invariant is about
-/// escrow bookkeeping staying correct through the make/cancel lifecycle,
-/// not the full accept-and-payout flow, which has its own dedicated tests
-/// already in Offers.t.sol.
 contract OffersHandler is Test {
     Offers public offersContract;
     MockUSDC public usdc;
     address public offerer;
     uint256 public tokenId;
 
-    uint256 public sumOfActiveOffers; // ground truth we track ourselves, to compare against the contract's real balance
+    uint256 public sumOfActiveOffers;
     uint256[] public activeOfferIds;
 
     constructor(Offers _offers, MockUSDC _usdc, address _offerer, uint256 _tokenId) {
@@ -38,7 +31,7 @@ contract OffersHandler is Test {
     }
 
     function makeOffer(uint256 amountSeed) public {
-        uint256 amount = bound(amountSeed, 1, 1_000_000_000); // up to 1,000 USDC
+        uint256 amount = bound(amountSeed, 1, 1_000_000_000);
         usdc.mint(offerer, amount);
         vm.prank(offerer);
         usdc.approve(address(offersContract), amount);
@@ -50,12 +43,12 @@ contract OffersHandler is Test {
     }
 
     function cancelRandomOffer(uint256 indexSeed) public {
-        if (activeOfferIds.length == 0) return; // nothing to cancel yet — skip, don't revert the whole run
+        if (activeOfferIds.length == 0) return;
         uint256 index = indexSeed % activeOfferIds.length;
         uint256 offerId = activeOfferIds[index];
 
-        (, , uint256 amount, , bool active) = offersContract.offers(offerId);
-        if (!active) return; // already cancelled in an earlier call this run
+        (, bool active, , uint256 amount, ) = offersContract.offers(offerId);
+        if (!active) return;
 
         vm.prank(offerer);
         offersContract.cancelOffer(offerId);
@@ -99,23 +92,15 @@ contract OffersInvariantTest is Test {
         vm.prank(curator);
         uint256 collectionId = nft.createCollection(10);
         vm.prank(owner_);
-        uint256 tokenId = nft.mint(collectionId, "ipfs://example", address(0), 0);
+        uint256 tokenId = nft.mint(collectionId, "ipfs://example", address(0), 0, type(uint256).max);
         vm.prank(curator);
         nft.endMint(collectionId);
 
         handler = new OffersHandler(offersContract, usdc, offerer, tokenId);
 
-        // Tell Foundry to ONLY call functions on the handler during
-        // invariant runs — not on offersContract/nft/etc. directly. This
-        // keeps every call going through realistic, properly-set-up
-        // paths (approvals, valid tokenIds) instead of the fuzzer trying
-        // truly random garbage against the real contracts.
         targetContract(address(handler));
     }
 
-    /// THE actual invariant: what the contract genuinely holds in USDC
-    /// must always exactly match what we believe is escrowed, no matter
-    /// what sequence of makeOffer/cancelOffer calls got us here.
     function invariant_EscrowedBalanceMatchesActiveOffers() public view {
         assertEq(usdc.balanceOf(address(offersContract)), handler.sumOfActiveOffers());
     }
