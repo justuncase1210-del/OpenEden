@@ -78,7 +78,23 @@ async function main() {
   app.use(paymentMiddlewareFromHTTPServer(x402Server));
 
   app.get("/health", (req, res) => res.json({ ok: true, environment: config.x402.environment }));
-
+  // Exposes the same contract addresses get_contract_info returns via
+  // MCP, but as a plain REST endpoint - lets the /create documentation
+  // page (and anything else) show live, always-current addresses
+  // instead of ones that go stale the next time contracts redeploy.
+  app.get("/api/contract-info", (req, res) => {
+    res.json({
+      chainId: config.chain.chainId,
+      agentRegistryAddress: config.chain.agentRegistryAddress,
+      nftContractAddress: config.chain.nftContractAddress,
+      marketplaceContractAddress: config.chain.marketplaceContractAddress,
+      offersContractAddress: config.chain.offersContractAddress,
+      communityRegistryAddress: config.chain.communityRegistryAddress,
+      // Base Sepolia's official USDC address - fixed, not part of your
+      // own deployment, so it isn't in config.js alongside the others.
+      usdcAddress: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    });
+  });
   app.use("/api/nfts", nftsRouter);
   app.use("/api/marketplace", marketplaceRouter);
   app.use("/api/community", communityRouter);
