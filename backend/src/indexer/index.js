@@ -84,6 +84,8 @@ async function backfillAndWatch({ address, abi, eventName, floorBlock, onLog }) 
     console.log(`[indexer] ${eventName}: resuming from persisted block ${startBlock} (floor was ${floorBlock})`);
   }
 
+  const chunkDelayMs = parseInt(config.chain.indexerChunkDelayMs || "0", 10);
+
   for (let from = startBlock; from <= latestBlock; from += CHUNK_SIZE) {
     const to = from + CHUNK_SIZE - 1n > latestBlock ? latestBlock : from + CHUNK_SIZE - 1n;
     const logs = await publicClient.getContractEvents({ address, abi, eventName, fromBlock: from, toBlock: to });
@@ -95,6 +97,7 @@ async function backfillAndWatch({ address, abi, eventName, floorBlock, onLog }) 
       }
     }
     await saveProgress(eventKey, to);
+    if (chunkDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, chunkDelayMs));
   }
 
   publicClient.watchContractEvent({

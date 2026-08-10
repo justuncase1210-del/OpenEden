@@ -33,6 +33,7 @@ export const config = {
     indexerStartBlock: process.env.INDEXER_START_BLOCK || "0",
     indexerPollingIntervalMs: parseInt(process.env.INDEXER_POLLING_INTERVAL_MS || "4000", 10),
     indexerChunkSize: process.env.INDEXER_CHUNK_SIZE || "1900",
+    indexerChunkDelayMs: process.env.INDEXER_CHUNK_DELAY_MS || "0",
   },
 
   ipfs: {
