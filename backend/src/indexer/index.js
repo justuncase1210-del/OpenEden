@@ -88,6 +88,7 @@ async function backfillAndWatch({ address, abi, eventName, floorBlock, onLog }) 
 
   for (let from = startBlock; from <= latestBlock; from += CHUNK_SIZE) {
     const to = from + CHUNK_SIZE - 1n > latestBlock ? latestBlock : from + CHUNK_SIZE - 1n;
+    console.log(`[indexer] ${eventName}: fetching blocks ${from}-${to}...`);
     const logs = await publicClient.getContractEvents({ address, abi, eventName, fromBlock: from, toBlock: to });
     for (const log of logs) {
       try {
