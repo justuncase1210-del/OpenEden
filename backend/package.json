@@ -5,7 +5,8 @@
   "description": "x402-gated agent API + MCP server for the AI NFT marketplace on Base",
   "scripts": {
     "dev": "node --watch src/index.js",
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "run:indexer": "node src/indexer-standalone.js"
   },
   "dependencies": {
     "@coinbase/cdp-sdk": "latest",

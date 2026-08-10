@@ -3,9 +3,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Same lesson as the last project: dotenv only auto-finds .env in the
-// process's cwd, which breaks if you `cd backend && npm run dev` from
-// elsewhere. Resolve explicitly relative to this file instead.
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
 export const config = {
@@ -38,12 +35,7 @@ export const config = {
   },
 
   ipfs: {
-    // Primary pinning provider.
     pinataJwt: process.env.PINATA_JWT || "",
-    // Backup provider — mirrors the SAME CID Pinata produces, so if
-    // Pinata ever goes down, metadata is still reachable at the same
-    // ipfs:// address from a second, independent host. Optional: if
-    // blank, minting still works fine, just without the backup pin.
     filebaseToken: process.env.FILEBASE_PINNING_TOKEN || "",
   },
 
@@ -58,4 +50,13 @@ export const config = {
   },
 
   adminSecret: process.env.ADMIN_SECRET || "",
+
+  monitoring: {
+    discordWebhookUrl: process.env.DISCORD_WEBHOOK_URL || "",
+  },
+
+  // See index.js — defaults to true so nothing changes unless you set
+  // RUN_INDEXER_INLINE=false in .env, for when you actually run
+  // indexer-standalone.js as its own separate process.
+  runIndexerInline: process.env.RUN_INDEXER_INLINE !== "false",
 };

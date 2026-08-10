@@ -16,15 +16,17 @@ import { collectionsRouter } from "./routes/collections.js";
 import { watchlistRouter } from "./routes/watchlist.js";
 import { agentsRouter } from "./routes/agents.js";
 import { activityRouter } from "./routes/activity.js";
+import { startWatchdog, alertOnCrash } from "./monitoring.js";
 
 process.on("unhandledRejection", (err) => {
   console.error("[unhandled rejection] a route threw an error without catching it:", err);
+  alertOnCrash(err);
 });
 
 async function main() {
   await initDb();
-
   const app = express();
+
   app.use(
     cors({
       origin: config.cors.allowedOrigins,
@@ -48,7 +50,8 @@ async function main() {
       message: { error: "Too many requests — slow down." },
     })
   );
-// A SECOND, stricter limiter layered on top of the IP-based one above —
+
+  // A SECOND, stricter limiter layered on top of the IP-based one above —
   // keyed by agentId when present in the request body, not just IP. This
   // is a real improvement, not a complete fix: an attacker who rotates
   // BOTH IP and agentId still isn't caught by either limiter. Genuine
@@ -65,9 +68,9 @@ async function main() {
   app.use("/api/nfts/prepare-metadata", agentWriteLimiter);
   app.use("/api/community/post", agentWriteLimiter);
   app.use("/api/community/metadata", agentWriteLimiter);
-  app.use("/api/watchlist", agentWriteLimiter);  
-  const x402Server = await buildX402Server();
+  app.use("/api/watchlist", agentWriteLimiter);
 
+  const x402Server = await buildX402Server();
   // The actual payment gate for REST routes. Inspects each request
   // against the "METHOD /path" keys declared in x402.js's routeConfig —
   // routes not listed there pass through untouched. MUST be mounted
@@ -97,14 +100,12 @@ async function main() {
   // tracked by sessionId so POST /messages routes to the right one.
   const mcpWrappers = await buildMcpPaymentWrappers();
   const mcpTransports = new Map();
-
   app.get("/sse", async (req, res) => {
     const transport = new SSEServerTransport("/messages", res);
     mcpTransports.set(transport.sessionId, transport);
     res.on("close", () => mcpTransports.delete(transport.sessionId));
     await createMcpServer(mcpWrappers).connect(transport);
   });
-
   app.post("/messages", async (req, res) => {
     const sessionId = String(req.query.sessionId ?? "");
     const transport = mcpTransports.get(sessionId);
@@ -132,10 +133,22 @@ async function main() {
     console.log(`  MCP free tools: register_agent, get_contract_info`);
   });
 
-  // Deliberately not awaited — see comment below.
-  startIndexer().catch((err) => {
-    console.error("[indexer] failed to start:", err);
-  });
+  startWatchdog();
+
+  // RUN_INDEXER_INLINE defaults to true — unset in .env, this behaves
+  // EXACTLY like tonight's build always has. Set to "false" only once
+  // you're actually running backend/src/indexer-standalone.js as its
+  // own separate process (e.g. multiple API server instances behind a
+  // load balancer) — running it in both places at once would mean two
+  // processes racing to write the same indexer_state rows.
+  if (config.runIndexerInline) {
+    // Deliberately not awaited — see comment below.
+    startIndexer().catch((err) => {
+      console.error("[indexer] failed to start:", err);
+    });
+  } else {
+    console.log("[indexer] RUN_INDEXER_INLINE=false — not starting inline. Run indexer-standalone.js separately.");
+  }
 }
 
 main().catch((err) => {
