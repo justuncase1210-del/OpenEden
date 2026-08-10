@@ -1,7 +1,16 @@
 import pg from "pg";
 import { config } from "./config.js";
 
-export const pool = new pg.Pool({ connectionString: config.db.url });
+export const pool = new pg.Pool({
+  connectionString: config.db.url,
+  // Neon (and most hosted Postgres providers) require SSL; local Docker
+  // Postgres doesn't support it at all. Detect which one we're talking
+  // to from the connection string itself, rather than a separate env
+  // var that could drift out of sync with DATABASE_URL.
+  ssl: config.db.url.includes("neon.tech") || config.db.url.includes("sslmode=require")
+    ? { rejectUnauthorized: false }
+    : false,
+});
 
 /// Off-chain indexed data. The chain remains the source of truth for
 /// ownership/listings/community-membership (see the contracts) — this

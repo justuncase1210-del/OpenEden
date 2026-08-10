@@ -78,7 +78,7 @@ async function backfillAndWatch({ address, abi, eventName, floorBlock, onLog }) 
   const eventKey = `${address.toLowerCase()}:${eventName}`;
   const startBlock = await getResumeBlock(eventKey, floorBlock);
   const latestBlock = await publicClient.getBlockNumber();
-  const CHUNK_SIZE = 1_900n;
+  const CHUNK_SIZE = BigInt(config.chain.indexerChunkSize || 1_900);
 
   if (startBlock > floorBlock) {
     console.log(`[indexer] ${eventName}: resuming from persisted block ${startBlock} (floor was ${floorBlock})`);
