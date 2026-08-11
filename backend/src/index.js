@@ -27,9 +27,23 @@ async function main() {
   await initDb();
   const app = express();
 
+  // Vercel generates a NEW hash-based URL on every single deployment
+  // (open-eden-<hash>-base-mcp.vercel.app) - listing exact strings in
+  // ALLOWED_ORIGINS would break on every future deploy. Instead: allow
+  // the stable custom domain/localhost entries from ALLOWED_ORIGINS
+  // exactly, PLUS any URL matching this project's Vercel deployment
+  // pattern via regex, so future deployments work without ever
+  // touching this config again.
+  const vercelPreviewPattern = /^https:\/\/open-eden-[a-z0-9]+-base-mcp\.vercel\.app$/;
   app.use(
     cors({
-      origin: config.cors.allowedOrigins,
+      origin: (origin, callback) => {
+        if (!origin) return callback(null, true); // non-browser requests (curl, agents) have no Origin header at all
+        if (config.cors.allowedOrigins.includes(origin) || vercelPreviewPattern.test(origin)) {
+          return callback(null, true);
+        }
+        return callback(new Error(`Origin ${origin} not allowed by CORS`));
+      },
     })
   );
   app.use(express.json());
