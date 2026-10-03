@@ -103,7 +103,7 @@ export async function startIndexer() {
   }
 
   const floorBlock = BigInt(config.chain.indexerStartBlock || 0);
-  const chunkSize = BigInt(config.chain.indexerChunkSize || 1_900);
+  let chunkSize = BigInt(config.chain.indexerChunkSize || 900);
   const chunkDelayMs = parseInt(config.chain.indexerChunkDelayMs || "0", 10);
   const confirmations = BigInt(config.chain.indexerConfirmations);
 
@@ -141,7 +141,20 @@ export async function startIndexer() {
         }
         await sleep(config.chain.indexerPollingIntervalMs);
       } catch (err) {
-        console.error(`[indexer] chunk starting at block ${next} failed, retrying in ${backoff}ms:`, err?.shortMessage || err?.message || err);
+        const detail = [err?.shortMessage, err?.details, err?.message].filter(Boolean).join(" | ");
+        // Public RPCs cap eth_getLogs ranges ("limited to a 1,000 range"). Learn the cap and
+        // shrink the chunk instead of failing forever.
+        const cap = detail.match(/limited to (?:a )?([\d,]+)(?: block)? range/i) || detail.match(/range (?:is )?(?:too large|exceed\w*)[^\d]*([\d,]+)/i);
+        if (cap) {
+          const limit = BigInt(cap[1].replace(/,/g, ""));
+          const smaller = limit > 100n ? (limit * 9n) / 10n : limit;
+          if (smaller < chunkSize) {
+            chunkSize = smaller;
+            console.warn(`[indexer] RPC caps eth_getLogs at ${limit} blocks - chunk size reduced to ${chunkSize}`);
+            continue;
+          }
+        }
+        console.error(`[indexer] chunk starting at block ${next} failed, retrying in ${backoff}ms:`, detail.slice(0, 300) || err);
         if (backoff >= 30_000) alertOnCrash(err);
         await sleep(backoff);
         backoff = Math.min(backoff * 2, 60_000);
