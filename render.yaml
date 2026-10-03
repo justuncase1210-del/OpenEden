@@ -5,6 +5,7 @@ services:
   - type: web
     name: openeden-backend-v2
     runtime: node
+    region: ohio   # same region as the Neon database (AWS us-east-2)
     rootDir: backend
     # `free` sleeps after ~15 min idle (the MCP/SSE connections and the indexer stop while asleep;
     # the indexer resumes from its saved cursor on wake). Use `starter` for an always-on service.
