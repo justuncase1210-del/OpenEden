@@ -94,6 +94,8 @@ export const config = {
 
   prices: {
     registerAgent: process.env.PRICE_REGISTER_AGENT || "0.05",
+    // link_wallet makes the relayer send an on-chain registerAgent transaction (gas), so it is paid too.
+    linkWallet: process.env.PRICE_LINK_WALLET || "0.02",
     prepareMetadata: process.env.PRICE_PREPARE_METADATA || "0.02",
     browse: process.env.PRICE_BROWSE || "0.01",
     getNft: process.env.PRICE_GET_NFT || "0.01",
@@ -101,6 +103,25 @@ export const config = {
     communityMetadata: process.env.PRICE_COMMUNITY_METADATA || "0.01",
     communityAssociation: process.env.PRICE_COMMUNITY_ASSOCIATION || "0.01",
     postToCommunity: process.env.PRICE_POST || "0.005",
+    collectionProfile: process.env.PRICE_COLLECTION_PROFILE || "0.01",
+    uploadImage: process.env.PRICE_UPLOAD_IMAGE || "0.02",
+  },
+
+  // Per-agent upload quota (rolling 24h) - bounds how much anyone can make us pin.
+  uploads: {
+    // OFF by default: uploads are pinned in the operator's own Pinata account, so they cost the
+    // operator money. Agents can supply any https:// image URL, or pin an ipfs:// image themselves.
+    enabled: process.env.ENABLE_IMAGE_UPLOAD === "true",
+    maxPerDay: parseInt(process.env.UPLOADS_MAX_PER_DAY || "20", 10),
+    maxBytesPerDay: parseInt(process.env.UPLOADS_MAX_BYTES_PER_DAY || String(50 * 1024 * 1024), 10),
+  },
+
+  // Platform-level ERC-7572 contractURI document (served at GET /api/contract-metadata).
+  platform: {
+    name: process.env.PLATFORM_NAME || "OpenEden Agent NFTs",
+    description: process.env.PLATFORM_DESCRIPTION || "NFTs minted, collected and traded by autonomous AI agents on Base.",
+    imageUrl: process.env.PLATFORM_IMAGE_URL || "",
+    siteUrl: process.env.SITE_URL || "",
   },
 
   adminSecret: process.env.ADMIN_SECRET || "",

@@ -1,6 +1,7 @@
 import { config } from "./config.js";
 
 const PINATA_PIN_JSON_URL = "https://api.pinata.cloud/pinning/pinJSONToIPFS";
+const PINATA_PIN_FILE_URL = "https://api.pinata.cloud/pinning/pinFileToIPFS";
 const FILEBASE_PIN_URL = "https://api.filebase.io/v1/ipfs/pins";
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 500;
@@ -114,6 +115,45 @@ export async function pinMetadataToIpfs(metadata) {
       const delay = RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
       console.warn(`[ipfs] pin attempt ${attempt}/${MAX_RETRIES} failed, retrying in ${delay}ms:`, err.message);
       await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw lastError;
+}
+/// Pins a binary file (an uploaded image) to IPFS via Pinata and mirrors it to Filebase.
+/// Needs a Pinata key that is allowed to call pinFileToIPFS (separate from pinJSONToIPFS).
+export async function pinFileToIpfs(buffer, filename, contentType) {
+  if (!config.ipfs.pinataJwt) throw Object.assign(new Error("PINATA_JWT not configured"), { status: 503 });
+
+  let lastError;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const form = new FormData();
+      form.append("file", new Blob([buffer], { type: contentType }), filename);
+      form.append("pinataOptions", JSON.stringify({ cidVersion: 1 }));
+      form.append("pinataMetadata", JSON.stringify({ name: `openeden-${filename}` }));
+
+      const res = await fetch(PINATA_PIN_FILE_URL, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${config.ipfs.pinataJwt}` },
+        body: form,
+        signal: AbortSignal.timeout(60_000),
+      });
+
+      if (!res.ok) {
+        if (res.status === 429 || res.status >= 500) throw new Error(`Pinata returned ${res.status} - retrying`);
+        const hint = res.status === 401 || res.status === 403 ? " (the Pinata API key needs the pinFileToIPFS permission)" : "";
+        throw Object.assign(new Error(`Pinata rejected the file: HTTP ${res.status}${hint}`), { permanent: true, status: 502 });
+      }
+      const data = await res.json();
+      if (!looksLikeValidCid(data.IpfsHash)) {
+        throw Object.assign(new Error("Pinata returned a response without a valid-looking CID"), { permanent: true, status: 502 });
+      }
+      backupPinToFilebase(data.IpfsHash); // fire-and-forget mirror
+      return { cid: data.IpfsHash };
+    } catch (err) {
+      lastError = err;
+      if (err.permanent || attempt === MAX_RETRIES) break;
+      await new Promise((resolve) => setTimeout(resolve, RETRY_BASE_DELAY_MS * 2 ** (attempt - 1)));
     }
   }
   throw lastError;

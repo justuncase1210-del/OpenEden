@@ -10,6 +10,8 @@ import { startIndexer } from "./indexer/index.js";
 import { createMcpServer } from "./mcp/server.js";
 import { buildMcpPaymentWrappers } from "./mcp/x402PaymentWrapper.js";
 import { nftsRouter } from "./routes/nfts.js";
+import { uploadsRouter } from "./routes/uploads.js";
+import { ALLOWED_IMAGE_TYPES, MAX_IMAGE_BYTES } from "./profile.js";
 import { marketplaceRouter } from "./routes/marketplace.js";
 import { communityRouter } from "./routes/community.js";
 import { collectionsRouter } from "./routes/collections.js";
@@ -94,6 +96,22 @@ async function main() {
     keyGenerator: (req) => req.agentAuth?.agentId || req.ip,
     message: { error: "Too many requests from this agentId — slow down." },
   });
+  // Image uploads send raw bytes, so this one route needs the raw-body parser BEFORE signature
+  // verification (the signature commits to a hash of exactly these bytes).
+  if (config.uploads.enabled) {
+    app.post(
+      "/api/uploads/image",
+      (req, res, next) => {
+        // Refuse unsupported types BEFORE signature checking: the raw-body parser below only reads
+        // allowed types, so anything else would otherwise fail later with a confusing 403.
+        const ct = (req.get("content-type") || "").split(";")[0].trim().toLowerCase();
+        if (!ALLOWED_IMAGE_TYPES.includes(ct)) return res.status(415).json({ error: `Content-Type must be one of: ${ALLOWED_IMAGE_TYPES.join(", ")} (SVG is not accepted)` });
+        next();
+      },
+      express.raw({ type: ALLOWED_IMAGE_TYPES, limit: MAX_IMAGE_BYTES, verify: (req, res, buf) => { req.rawBody = buf; } }),
+      verifyAgentSignature
+    );
+  }
   // Wallet-signature auth for every state-changing off-chain endpoint. Runs
   // BEFORE the limiter and the x402 payment gate; the nonce is only burned
   // later, at router level, so the 402 -> paid retry can reuse the signature.
@@ -102,12 +120,15 @@ async function main() {
     ["post", "/api/nfts/:tokenId/community"],
     ["post", "/api/community/metadata"],
     ["post", "/api/community/post"],
+    ["post", "/api/collections/:id/profile"],
     ["post", "/api/watchlist"],
     ["delete", "/api/watchlist/:id"],
   ]) {
     app[method](path, verifyAgentSignature);
   }
   app.use("/api/nfts/prepare-metadata", agentWriteLimiter);
+  if (config.uploads.enabled) app.use("/api/uploads", agentWriteLimiter);
+  app.use("/api/collections/:id/profile", agentWriteLimiter);
   app.use("/api/community/post", agentWriteLimiter);
   app.use("/api/community/metadata", agentWriteLimiter);
   app.use("/api/watchlist", agentWriteLimiter);
@@ -148,8 +169,20 @@ async function main() {
     }
     return router;
   };
-  [nftsRouter, marketplaceRouter, communityRouter, collectionsRouter, watchlistRouter, agentsRouter, activityRouter].forEach(wrapAsync);
+  [nftsRouter, uploadsRouter, marketplaceRouter, communityRouter, collectionsRouter, watchlistRouter, agentsRouter, activityRouter].forEach(wrapAsync);
+  // ERC-7572 contractURI target for the AgentNFT contract as a whole (owner sets it on-chain with
+  // setContractURI). Per-collection names/images live in each collection's profile instead.
+  app.get("/api/contract-metadata", (req, res) => {
+    const siteUrl = config.platform.siteUrl || config.cors.allowedOrigins.find((o) => o.startsWith("https://")) || "";
+    res.json({
+      name: config.platform.name,
+      description: config.platform.description,
+      ...(config.platform.imageUrl && { image: config.platform.imageUrl }),
+      ...(siteUrl && { external_link: siteUrl }),
+    });
+  });
   app.use("/api/nfts", nftsRouter);
+  if (config.uploads.enabled) app.use("/api/uploads", uploadsRouter);
   app.use("/api/marketplace", marketplaceRouter);
   app.use("/api/community", communityRouter);
   app.use("/api/collections", collectionsRouter);

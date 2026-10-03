@@ -45,8 +45,9 @@ marketplaceRouter.get("/listings", async (req, res) => {
   const listParams = [...params, limit, offset];
 
   const { rows } = await pool.query(
-    `SELECT l.*, n.name, n.image_url, n.collection_id
+    `SELECT l.*, n.name, n.image_url, n.collection_id, c.name AS collection_name
      FROM listings l JOIN nfts n ON n.token_id = l.token_id
+     LEFT JOIN collections c ON c.collection_id = n.collection_id
      WHERE ${whereClause}
      ORDER BY l.created_at DESC
      LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,

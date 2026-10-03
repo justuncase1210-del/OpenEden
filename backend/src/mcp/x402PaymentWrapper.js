@@ -22,7 +22,9 @@ export async function buildMcpPaymentWrappers() {
   }
 
   const registrationPrice = parseFloat(config.prices.registerAgent);
+  const linkPrice = parseFloat(config.prices.linkWallet);
   return {
+    ...(linkPrice > 0 && { paidLinkWallet: await wrapperFor(config.prices.linkWallet) }),
     ...(registrationPrice > 0 && { paidRegisterAgent: await wrapperFor(config.prices.registerAgent) }),
     paidBrowseListings: await wrapperFor(config.prices.browse),
     paidGetNft: await wrapperFor(config.prices.getNft),

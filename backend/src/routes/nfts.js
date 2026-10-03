@@ -6,6 +6,7 @@ import { pinMetadataToIpfs, validateMetadataSchema } from "../ipfs.js";
 import { config } from "../config.js";
 import { sanitizeAttributes } from "../rarity.js";
 import { safeImageUrl } from "../indexer/metadata.js";
+import { validateExtraMetadata } from "../profile.js";
 
 export const nftsRouter = Router();
 
@@ -29,7 +30,10 @@ nftsRouter.post("/prepare-metadata", consumeSignature, async (req, res) => {
   const errors = validateMetadataSchema({ name, description, image, attributes });
   if (errors.length > 0) return res.status(400).json({ error: errors.join("; ") });
 
-  const metadata = { name, image };
+  const extra = validateExtraMetadata(req.body);
+  if (extra.errors.length > 0) return res.status(400).json({ error: extra.errors.join("; ") });
+
+  const metadata = { name, image, ...extra.values };
   if (typeof description === "string" && description) metadata.description = description;
   if (attributes !== undefined) metadata.attributes = sanitizeAttributes(attributes) ?? [];
 
@@ -90,7 +94,11 @@ nftsRouter.get("/:tokenId", async (req, res) => {
   if (!/^\d+$/.test(req.params.tokenId)) {
     return res.status(400).json({ error: "tokenId must be a number" });
   }
-  const { rows } = await pool.query("SELECT * FROM nfts WHERE token_id = $1", [req.params.tokenId]);
+  const { rows } = await pool.query(
+    `SELECT n.*, c.name AS collection_name, c.symbol AS collection_symbol, c.image_url AS collection_image_url
+     FROM nfts n LEFT JOIN collections c ON c.collection_id = n.collection_id WHERE n.token_id = $1`,
+    [req.params.tokenId]
+  );
   if (rows.length === 0) return res.status(404).json({ error: "not found" });
   res.json(rows[0]);
 });

@@ -85,11 +85,18 @@ check(col[2] === agentId.curator, "collection records the curator's agentId", `c
 step("3. Minter pins metadata to IPFS (paid, wallet-signed REST call)");
 const metas = [
   { name: `Cycle Test #1 (run ${RUN})`, description: "First NFT minted by the cycle test", image: IMAGE_URL,
+    external_url: "https://example.com/cycle/1", animation_url: "https://example.com/cycle/1.mp4", background_color: "#112233",
     attributes: [{ trait_type: "Background", value: "Blue" }, { trait_type: "Eyes", value: "Green" }, { trait_type: "Hat", value: "None" }] },
   { name: `Cycle Test #2 (run ${RUN})`, description: "Second NFT minted by the cycle test", image: IMAGE_URL,
     attributes: [{ trait_type: "Background", value: "Red" }, { trait_type: "Eyes", value: "Green" }, { trait_type: "Hat", value: "Crown" }] },
 ];
 const paidFetch = payingFetch(ctx, minter);
+
+for (const [label, extra] of [["external_url that is not https", { external_url: "http://insecure.example" }], ["animation_url with a javascript: scheme", { animation_url: "javascript:alert(1)" }], ["background_color that is not hex", { background_color: "red" }]]) {
+  const r = await signedRequest({ account: minter, agentId: agentId.minter, method: "POST", path: "/api/nfts/prepare-metadata", body: { name: "x", image: IMAGE_URL, ...extra }, fetchFn: paidFetch });
+  if (r.status === 503) warn(`skipped "${label}" check: server has no PINATA_JWT`);
+  else check(r.status === 400, `metadata with ${label} is rejected (400)`, `${label} got HTTP ${r.status} ${JSON.stringify(r.data)}`);
+}
 
 const bogus = await signedRequest({ account: minter, agentId: agentId.minter, method: "POST", path: "/api/nfts/prepare-metadata",
   body: { name: "x", image: "http://insecure.example/x.png" }, fetchFn: paidFetch });

@@ -1,5 +1,6 @@
 import { config } from "../config.js";
 import { sanitizeAttributes } from "../rarity.js";
+import { validateExtraMetadata } from "../profile.js";
 
 const MAX_METADATA_BYTES = 100_000;
 // CIDv0 or CIDv1 (base32), optionally followed by a plain sub-path. Anything
@@ -44,7 +45,7 @@ async function readCapped(res) {
 /// taken from the (minter-controlled) tokenURI - so this cannot be pointed
 /// at internal infrastructure (SSRF).
 export async function fetchTokenMetadata(tokenURI) {
-  const empty = { name: null, description: null, imageUrl: null, attributes: null };
+  const empty = { name: null, description: null, imageUrl: null, attributes: null, externalUrl: null, animationUrl: null, backgroundColor: null };
   const path = ipfsPathFromUri(tokenURI);
   if (!path) return empty;
 
@@ -55,11 +56,15 @@ export async function fetchTokenMetadata(tokenURI) {
       const metadata = JSON.parse(await readCapped(res));
       if (typeof metadata !== "object" || metadata === null) continue;
       const attrs = sanitizeAttributes(metadata.attributes);
+      const extra = validateExtraMetadata(metadata).values; // invalid extras are dropped, never stored
       return {
         name: typeof metadata.name === "string" ? metadata.name.slice(0, 200) : null,
         description: typeof metadata.description === "string" ? metadata.description.slice(0, 2000) : null,
         imageUrl: safeImageUrl(metadata.image),
         attributes: attrs && attrs.length ? attrs : null,
+        externalUrl: extra.external_url ?? null,
+        animationUrl: extra.animation_url ?? null,
+        backgroundColor: extra.background_color ?? null,
       };
     } catch (err) {
       console.warn(`[indexer] metadata fetch via ${gateway} failed for ${path}: ${err.message}`);

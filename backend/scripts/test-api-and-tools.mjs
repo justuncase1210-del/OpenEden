@@ -8,7 +8,7 @@
 //
 // Cost: ~$0.12 of testnet USDC in x402 fees (+ a little gas for the community transactions).
 import {
-  ABI, setup, ensureFunded, tx, expectRevert, usd, fmt, sleep, loadState, connectMcp, payingFetch, signedRequest, getJson, waitFor,
+  ABI, setup, logsOf, ensureFunded, tx, expectRevert, usd, fmt, sleep, loadState, connectMcp, payingFetch, signedRequest, getJson, waitFor,
   keccak256, toBytes, ok, bad, warn, info, step, check, die, finish, BACKEND_URL, RUN, IS_LOCAL,
 } from "./lib.mjs";
 
@@ -49,6 +49,8 @@ if (st.usedPinnedMetadata) {
   check(!!gotMeta && /^Cycle Test #1/.test(gotMeta.name), `token #${token1} metadata was fetched from IPFS: "${gotMeta?.name}"`, "metadata (name) never appeared - IPFS gateway slow, or Pinata not pinning");
   check(!!gotMeta?.image_url, `image URL stored: ${gotMeta?.image_url}`, "no image_url stored");
   check(Array.isArray(gotMeta?.attributes) && gotMeta.attributes.length === 3, "3 trait attributes stored", `attributes: ${JSON.stringify(gotMeta?.attributes)}`);
+  check(gotMeta?.external_url === "https://example.com/cycle/1" && gotMeta?.animation_url === "https://example.com/cycle/1.mp4" && gotMeta?.background_color === "112233",
+    "external_url, animation_url and background_color were pinned, fetched and indexed", `extras: ${gotMeta?.external_url} | ${gotMeta?.animation_url} | ${gotMeta?.background_color}`);
 } else warn("cycle used placeholder metadata, so name/image/attribute checks are skipped");
 
 const coll = (await getJson(`/api/collections/${collectionId}`)).data;
@@ -104,6 +106,96 @@ for (const p of ["/api/collections/abc", "/api/collections/abc/traits", "/api/nf
 }
 const malformed = await fetch(`${BACKEND_URL}/api/watchlist`, { method: "POST", headers: { "content-type": "application/json" }, body: "{not json" });
 check(malformed.status === 400 || malformed.status === 401, `malformed JSON -> ${malformed.status}, not a 500`, `malformed JSON -> HTTP ${malformed.status}`);
+
+// --------------------------------------------------------------------------------------------- 3c
+step("3c. Collection identity (name, symbol, description, image, banner) - set by the creator, paid");
+const curPay = payingFetch(ctx, curator), minPay = payingFetch(ctx, minter);
+const profilePath = `/api/collections/${collectionId}/profile`;
+const uniqueName = `Cycle Cats ${RUN} ${Date.now().toString(36)}`;
+
+let p = await signedRequest({ account: minter, agentId: st.agentId.minter, method: "POST", path: profilePath, body: { name: "Hijacked" }, fetchFn: minPay });
+check(p.status === 403, "only the collection's creator can edit its profile (403 for another agent)", `HTTP ${p.status} ${JSON.stringify(p.data)}`);
+p = await signedRequest({ account: curator, agentId: st.agentId.curator, method: "POST", path: profilePath, body: {}, fetchFn: curPay });
+check(p.status === 400, "an empty update is rejected (400)", `HTTP ${p.status}`);
+for (const [label, body] of [
+  ["javascript: image URL", { imageUrl: "javascript:alert(1)" }],
+  ["plain-http banner URL", { bannerUrl: "http://insecure.example/b.png" }],
+  ["data: image URL", { imageUrl: "data:image/png;base64,AAAA" }],
+  ["non-https website", { externalUrl: "ipfs://bafyexample" }],
+  ["symbol with punctuation", { symbol: "BAD-SYMBOL!" }],
+  ["100+ character name", { name: "x".repeat(101) }],
+]) {
+  p = await signedRequest({ account: curator, agentId: st.agentId.curator, method: "POST", path: profilePath, body, fetchFn: curPay });
+  check(p.status === 400, `${label} is rejected (400)`, `${label} -> HTTP ${p.status} ${JSON.stringify(p.data)}`);
+}
+
+p = await signedRequest({ account: curator, agentId: st.agentId.curator, method: "POST", path: profilePath, fetchFn: curPay,
+  body: { name: uniqueName, symbol: "ccat", description: "Created by the cycle test", externalUrl: "https://example.com/cats", imageUrl: "https://example.com/cats.png", bannerUrl: "https://example.com/banner.png" } });
+check(p.status === 200 && p.data.name === uniqueName && p.data.symbol === "CCAT", `creator set the profile: "${p.data.name}" (${p.data.symbol})`, `HTTP ${p.status} ${JSON.stringify(p.data)}`);
+
+let col2 = (await getJson(`/api/collections/${collectionId}`)).data;
+check(col2.name === uniqueName && col2.description === "Created by the cycle test" && col2.banner_url === "https://example.com/banner.png" && col2.external_url === "https://example.com/cats",
+  "GET /api/collections/:id returns the identity fields", JSON.stringify(col2).slice(0, 220));
+check((await getJson(`/api/nfts/${token1}`)).data.collection_name === uniqueName, `the NFT page data now shows the collection name instead of "#${collectionId}"`, "nft route is missing collection_name");
+check((await getJson("/api/collections?limit=50")).data.collections.some((c) => c.name === uniqueName), "the collections directory shows the name", "name missing from /api/collections");
+const trend = (await getJson("/api/collections/trending?window=7d")).data.trending || [];
+if (trend.some((t) => t.collection_id === collectionId)) check(trend.find((t) => t.collection_id === collectionId).name === uniqueName, "trending includes the name", "trending is missing the name");
+
+p = await signedRequest({ account: curator, agentId: st.agentId.curator, method: "POST", path: profilePath, body: { description: null, bannerUrl: "" }, fetchFn: curPay });
+col2 = (await getJson(`/api/collections/${collectionId}`)).data;
+check(p.status === 200 && col2.description === null && col2.banner_url === null && col2.name === uniqueName, "null / empty clears optional fields without touching the rest", `HTTP ${p.status} ${JSON.stringify(col2).slice(0, 200)}`);
+
+// name uniqueness needs a second collection (a wallet may create 2 per week; the cycle used 1)
+let second;
+try {
+  const created = await tx(ctx, curator, addr.nft, ABI.nft, "createCollection", [3n]);
+  second = logsOf(created, ABI.nft, "CollectionCreated")[0].args.collectionId.toString();
+} catch { warn("skipped the name-uniqueness check: could not create a second collection (weekly limit of 2 per wallet - use CYCLE_RUN=n for fresh agents)"); }
+if (second) {
+  const seen = await waitFor("second collection", async () => (await getJson(`/api/collections/${second}`)).status === 200);
+  if (seen) {
+    p = await signedRequest({ account: curator, agentId: st.agentId.curator, method: "POST", path: `/api/collections/${second}/profile`, body: { name: uniqueName.toUpperCase() }, fetchFn: curPay });
+    check(p.status === 409, "a second collection cannot take the same name, even in different capitals (409)", `HTTP ${p.status} ${JSON.stringify(p.data)}`);
+    p = await signedRequest({ account: curator, agentId: st.agentId.curator, method: "POST", path: `/api/collections/${second}/profile`, body: { name: `${uniqueName} II` }, fetchFn: curPay });
+    check(p.status === 200, "a different name is fine", `HTTP ${p.status}`);
+  } else warn("second collection was not indexed in time; skipped the uniqueness check");
+}
+p = await signedRequest({ account: curator, agentId: st.agentId.curator, method: "POST", path: "/api/collections/99999999/profile", body: { name: "Nope" }, fetchFn: curPay });
+check(p.status === 404, "a collection that doesn't exist -> 404", `HTTP ${p.status}`);
+
+// --------------------------------------------------------------------------------------------- 3d
+step("3d. Image upload (only exists when ENABLE_IMAGE_UPLOAD=true on the server)");
+const PNG_1x1 = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+const upload = (buf, contentType, account = minter, agentId = st.agentId.minter, fetchFn = minPay) =>
+  signedRequest({ account, agentId, method: "POST", path: "/api/uploads/image", rawBuffer: buf, contentType, fetchFn });
+
+let up = await upload(PNG_1x1, "image/png");
+if (up.status === 404) {
+  warn("image upload is switched off on this server (by design - agents supply their own image URL or pin to IPFS themselves)");
+} else if (up.status === 502 || up.status === 503) {
+  warn(`image upload is enabled but pinning failed (HTTP ${up.status}: ${up.data.error}) - the Pinata key probably lacks the pinFileToIPFS permission`);
+} else {
+  check(up.status === 200 && /^ipfs:\/\//.test(up.data.uri) && up.data.bytes === PNG_1x1.length && up.data.contentType === "image/png", `PNG uploaded and pinned -> ${up.data.uri}`, `HTTP ${up.status} ${JSON.stringify(up.data)}`);
+  if (IS_LOCAL && up.data.url) {
+    const back = await fetch(up.data.url);
+    check(back.status === 200 && Buffer.from(await back.arrayBuffer()).equals(PNG_1x1), "the pinned file is retrievable from the gateway, byte for byte", `gateway returned HTTP ${back.status}`);
+  }
+  up = await upload(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'), "image/svg+xml");
+  check(up.status === 415, "SVG is refused (415)", `SVG got HTTP ${up.status}`);
+  up = await upload(PNG_1x1, "image/jpeg");
+  check(up.status === 415, "a PNG labelled as JPEG is refused (415)", `mislabelled got HTTP ${up.status}`);
+  up = await upload(Buffer.from("MZ" + "x".repeat(200)), "image/png");
+  check(up.status === 415, "a non-image labelled as PNG is refused (415)", `non-image got HTTP ${up.status}`);
+  up = await upload(Buffer.alloc(0), "image/png");
+  check(up.status === 415, "an empty upload is refused (415)", `empty got HTTP ${up.status}`);
+  const noAuth = await fetch(`${BACKEND_URL}/api/uploads/image`, { method: "POST", headers: { "content-type": "image/png" }, body: PNG_1x1 });
+  check(noAuth.status === 401, "an unsigned upload is rejected (401)", `unsigned upload got HTTP ${noAuth.status}`);
+  const used = await signedRequest({ account: curator, agentId: st.agentId.curator, method: "POST", path: "/api/uploads/image", rawBuffer: PNG_1x1, contentType: "image/png", fetchFn: curPay });
+  if (used.status === 200) {
+    const asImage = await signedRequest({ account: curator, agentId: st.agentId.curator, method: "POST", path: profilePath, body: { imageUrl: used.data.uri }, fetchFn: curPay });
+    check(asImage.status === 200 && asImage.data.image_url === used.data.uri, "the uploaded ipfs:// URI works as the collection image", `HTTP ${asImage.status} ${JSON.stringify(asImage.data)}`);
+  }
+}
 
 // --------------------------------------------------------------------------------------------- 4
 step("4. Paid MCP tools (x402, ~$0.01 each) - called as the buyer");
@@ -251,6 +343,7 @@ for (const [method, p, body] of [
   ["POST", `/api/nfts/${token1}/community`, { communitySlug: slug, agentId: st.agentId.buyer }],
   ["POST", "/api/nfts/prepare-metadata", { name: "x", image: "https://x.example/y.png", agentId: st.agentId.minter }],
   ["POST", "/api/watchlist", { tokenId: token1, agentId: st.agentId.buyer }],
+  ["POST", `/api/collections/${collectionId}/profile`, { name: "spoof", agentId: st.agentId.curator }],
   ["DELETE", "/api/watchlist/1?agentId=" + st.agentId.buyer, undefined],
 ]) {
   const res = await fetch(`${BACKEND_URL}${p}`, { method, headers: { "content-type": "application/json" }, body: body && JSON.stringify(body) });

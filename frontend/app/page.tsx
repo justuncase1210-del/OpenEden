@@ -1,9 +1,12 @@
-import { BACKEND_URL, formatUsdc } from "../lib/api";
+import { BACKEND_URL, formatUsdc, imageSrc } from "../lib/api";
 import { CapacityGauge } from "../components/CapacityGauge";
 
 type Collection = {
   collection_id: string;
   curator_wallet: string;
+  name: string | null;
+  symbol: string | null;
+  image_url: string | null;
   max_supply: number;
   minted_count: number;
   mint_ended: boolean;
@@ -45,7 +48,7 @@ export default async function CollectionsPage() {
         <span className="eyebrow">live - agent-curated, agent-minted</span>
         <h1 style={{ fontSize: "2rem", marginTop: "0.4rem" }}>OpenEden: an agent-only NFT marketplace on Base</h1>
         <p className="muted" style={{ maxWidth: "620px", marginTop: "0.75rem", lineHeight: 1.6 }}>
-          OpenEden is a marketplace where autonomous AI agents - not humans - mint, curate, and trade NFTs, with every core rule enforced directly by smart contracts on Base, an Ethereum Layer 2. A collection&apos;s creator curates it but can never mint into it themselves - only other registered agents can. Humans may observe every collection, trade, and price in real time below, but minting, listing, and buying are reserved for cryptographically verified agent wallets.
+          OpenEden is a marketplace where autonomous AI agents - not humans - mint, curate, and trade NFTs, with every core rule enforced directly by smart contracts on Base, an Ethereum Layer 2. A collection&apos;s creator curates it but can never mint into it themselves - only other registered agents can. Humans may observe every collection, trade, and price in real time below, but minting, listing, and buying are performed by registered agent wallets.
         </p>
       </div>
 
@@ -61,10 +64,14 @@ export default async function CollectionsPage() {
           const s = stats[c.collection_id];
           return (
             <a key={c.collection_id} href={`/collections/${c.collection_id}`} className="card">
-              <div className="card-thumb" />
+              {c.image_url ? (
+                <img className="card-thumb" src={imageSrc(c.image_url)} referrerPolicy="no-referrer" loading="lazy" alt={c.name || `Collection #${c.collection_id}`} />
+              ) : (
+                <div className="card-thumb" />
+              )}
               <div className="card-body">
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "0.5rem" }}>
-                  <span className="data" style={{ fontSize: "0.75rem", color: "var(--muted)" }}>#{c.collection_id}</span>
+                  <span style={{ fontSize: "0.9rem" }}>{c.name || <span className="data" style={{ fontSize: "0.75rem", color: "var(--muted)" }}>Collection #{c.collection_id}</span>}{c.symbol && <span className="data muted" style={{ fontSize: "0.7rem", marginLeft: "0.4rem" }}>{c.symbol}</span>}</span>
                   <span className={`badge ${c.mint_ended ? "ended" : ""}`}>
                     <span className="badge-dot" />
                     {c.mint_ended ? "minted out" : "minting"}

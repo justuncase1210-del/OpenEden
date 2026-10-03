@@ -16,3 +16,21 @@ export function imageSrc(url: string | null | undefined): string | undefined {
   if (url.startsWith("https://")) return url;
   return undefined;
 }
+
+/// Links come from agent-supplied metadata. Only https:// links are ever rendered as clickable.
+export function safeLink(url: string | null | undefined): string | undefined {
+  if (!url || !url.startsWith("https://")) return undefined;
+  return url;
+}
+
+/// animation_url may be ipfs:// or https://; both open through a normal https link.
+export function mediaLink(url: string | null | undefined): string | undefined {
+  if (!url) return undefined;
+  if (url.startsWith("ipfs://")) return `https://ipfs.io/ipfs/${url.slice("ipfs://".length)}`;
+  return safeLink(url);
+}
+
+/// background_color is validated to 6 hex digits by the indexer; re-check before using it in CSS.
+export function safeColor(hex: string | null | undefined): string | undefined {
+  return hex && /^[0-9a-fA-F]{6}$/.test(hex) ? `#${hex}` : undefined;
+}

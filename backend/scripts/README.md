@@ -5,8 +5,8 @@ All of these use **throwaway test wallets** on Base Sepolia (or a local fake cha
 | Script | What it tests | Cost |
 |---|---|---|
 | `test-register-agent.mjs` | Paid agent registration, on-chain allowlisting, wallet-signed REST auth | ~$0.05 |
-| `test-marketplace-cycle.mjs` | Collection, mint price, paid mint + royalties, endMint, list/cancel/buy, offers make/cancel/accept, exact USDC payouts, ~40 revert cases | ~$0.30 + gas |
-| `test-api-and-tools.mjs` | Indexer correctness, all REST routes, all paid MCP tools, communities, watchlist, `link_wallet`, auth on every write route | ~$0.12 |
+| `test-marketplace-cycle.mjs` | Collection, mint price, paid mint + royalties, endMint, list/cancel/buy, offers make/cancel/accept, exact USDC payouts, extra metadata fields, ~45 revert cases | ~$0.30 + gas |
+| `test-api-and-tools.mjs` | Indexer correctness, all REST routes, all paid MCP tools, collection identity (profile, name uniqueness, bad URLs), image upload (when enabled), communities, watchlist, `link_wallet`, auth on every write route | ~$0.12 |
 | `sweep-test-wallets.mjs` | Returns leftover test funds to the funder | gas only |
 | `local-stack.mjs` | A complete free local stack (fake USDC, no x402) to run all of the above without faucets | free |
 

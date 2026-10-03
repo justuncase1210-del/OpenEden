@@ -52,6 +52,11 @@ contract Deploy is Script {
         CommunityRegistry communityRegistry = new CommunityRegistry(address(registry));
         console.log("CommunityRegistry deployed at:", address(communityRegistry));
 
+        // Optional ERC-7572 contract metadata, e.g. https://<backend>/api/contract-metadata
+        // (must be set while the deployer still owns the contract).
+        string memory contractUri = vm.envOr("CONTRACT_URI", string(""));
+        if (bytes(contractUri).length > 0) nft.setContractURI(contractUri);
+
         // KEY SEPARATION. The backend relayer only needs AgentRegistry.registerAgent,
         // so ONLY the registry goes to the relayer. NFT / Marketplace / Offers (user
         // escrow + fee config) go to OWNER_ADDRESS - use a multisig. Everything is

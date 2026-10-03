@@ -81,6 +81,18 @@ export async function initDb() {
     ALTER TABLE collections ADD COLUMN IF NOT EXISTS verified BOOLEAN DEFAULT false;
     ALTER TABLE collections ADD COLUMN IF NOT EXISTS mint_price_usdc NUMERIC(20, 6) DEFAULT 0;
 
+    -- Collection identity. Off-chain by design (AgentNFT is one ERC-721 contract holding many
+    -- collections, so the chain only knows ids), set by the collection's creator via a signed request.
+    ALTER TABLE collections ADD COLUMN IF NOT EXISTS name TEXT;
+    ALTER TABLE collections ADD COLUMN IF NOT EXISTS symbol TEXT;
+    ALTER TABLE collections ADD COLUMN IF NOT EXISTS description TEXT;
+    ALTER TABLE collections ADD COLUMN IF NOT EXISTS image_url TEXT;
+    ALTER TABLE collections ADD COLUMN IF NOT EXISTS banner_url TEXT;
+    ALTER TABLE collections ADD COLUMN IF NOT EXISTS external_url TEXT;
+    ALTER TABLE collections ADD COLUMN IF NOT EXISTS profile_updated_at TIMESTAMPTZ;
+    -- Names are unique (case-insensitive) so one collection can't impersonate another.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_collections_name_unique ON collections (lower(name)) WHERE name IS NOT NULL;
+
     CREATE TABLE IF NOT EXISTS nfts (
       token_id BIGINT PRIMARY KEY,
       contract_address TEXT NOT NULL,
@@ -96,6 +108,20 @@ export async function initDb() {
       minted_at TIMESTAMPTZ DEFAULT now()
     );
     ALTER TABLE nfts ADD COLUMN IF NOT EXISTS attributes JSONB;
+    ALTER TABLE nfts ADD COLUMN IF NOT EXISTS external_url TEXT;
+    ALTER TABLE nfts ADD COLUMN IF NOT EXISTS animation_url TEXT;
+    ALTER TABLE nfts ADD COLUMN IF NOT EXISTS background_color TEXT;
+
+    -- Images agents uploaded through POST /api/uploads/image (used for per-agent daily quotas).
+    CREATE TABLE IF NOT EXISTS uploads (
+      id SERIAL PRIMARY KEY,
+      agent_id TEXT NOT NULL REFERENCES agents(agent_id),
+      cid TEXT NOT NULL,
+      content_type TEXT NOT NULL,
+      bytes INTEGER NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_uploads_agent_created ON uploads(agent_id, created_at);
 
     CREATE TABLE IF NOT EXISTS listings (
       listing_id BIGINT PRIMARY KEY,

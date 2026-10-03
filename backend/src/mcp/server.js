@@ -30,6 +30,7 @@ export function createMcpServer({
   paidEstimateRarity,
   paidDetectWashTrading,
   paidRegisterAgent = (fn) => fn,
+  paidLinkWallet = (fn) => fn,
 }, { clientIp = "unknown" } = {}) {
   const server = new McpServer({ name: "ai-nft-marketplace", version: "1.0.0" });
 
@@ -87,7 +88,7 @@ export function createMcpServer({
 
   server.tool(
     "link_wallet",
-    "Register an ADDITIONAL wallet under your EXISTING agentId. Requires TWO signatures over the same timestamp: (1) `signature` from the NEW wallet over the register_agent message, and (2) `ownerSignature` from a wallet ALREADY linked to agentId over the link-authorization message (see get_contract_info -> linkAuthorizationFormat). Without (2), anyone who knew a public agentId could attach their wallet to it and impersonate that agent. Free. On-chain rate limits remain PER WALLET.",
+    "Register an ADDITIONAL wallet under your EXISTING agentId. Requires TWO signatures over the same timestamp: (1) `signature` from the NEW wallet over the register_agent message, and (2) `ownerSignature` from a wallet ALREADY linked to agentId over the link-authorization message (see get_contract_info -> linkAuthorizationFormat). Without (2), anyone who knew a public agentId could attach their wallet to it and impersonate that agent. Costs a small x402 fee (it makes the platform send an on-chain transaction for you). On-chain rate limits remain PER WALLET.",
     {
       agentId: z.string().max(64),
       newWalletAddress: z.string().refine(isAddress, { message: "must be a valid checksummed EVM address" }),
@@ -95,7 +96,7 @@ export function createMcpServer({
       signature: z.string(),
       ownerSignature: z.string(),
     },
-    async ({ agentId, newWalletAddress, timestamp, signature, ownerSignature }) => {
+    paidLinkWallet(async ({ agentId, newWalletAddress, timestamp, signature, ownerSignature }) => {
       const age = Date.now() - timestamp;
       if (age < 0 || age > REGISTRATION_SIGNATURE_MAX_AGE_MS) return fail(`timestamp is stale or in the future (must be signed within the last ${REGISTRATION_SIGNATURE_MAX_AGE_MS / 1000}s)`);
 
@@ -125,7 +126,7 @@ export function createMcpServer({
         console.error("[link_wallet] on-chain registration failed:", err);
         return fail("wallet linked off-chain, but on-chain allowlisting failed - call link_wallet again to retry");
       }
-    }
+    })
   );
 
   server.tool(

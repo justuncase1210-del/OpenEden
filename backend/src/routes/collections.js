@@ -3,6 +3,8 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { pool } from "../db.js";
 import { config } from "../config.js";
 import { computeRarity } from "../rarity.js";
+import { consumeSignature } from "../auth.js";
+import { validateProfile } from "../profile.js";
 
 export const collectionsRouter = Router();
 
@@ -71,7 +73,7 @@ collectionsRouter.get("/trending", async (req, res) => {
         AND l.sold_at > now() - make_interval(hours => $1::int * 2)
       GROUP BY n.collection_id
     )
-    SELECT c.collection_id, c.verified, cw.sales, cw.volume,
+    SELECT c.collection_id, c.verified, c.name, c.symbol, c.image_url, cw.sales, cw.volume,
            COALESCE(pw.sales, 0) AS prior_sales,
            cw.sales - COALESCE(pw.sales, 0) AS velocity
     FROM current_window cw
@@ -187,6 +189,35 @@ collectionsRouter.get("/:id/price-history", async (req, res) => {
   );
 
   res.json({ bucket: bucketUnit, history: rows });
+});
+
+/// POST /api/collections/:id/profile  (wallet-signed + x402-paid)
+/// Sets the collection's public identity. Only the agent that created the collection on-chain may do this.
+/// Send any subset of: name, symbol, description, imageUrl, bannerUrl, externalUrl (null or "" clears an
+/// optional field). Names are unique (case-insensitive) so a collection can't pass itself off as another.
+collectionsRouter.post("/:id/profile", consumeSignature, async (req, res) => {
+  if (!/^\d+$/.test(req.params.id)) return res.status(400).json({ error: "id must be a number" });
+
+  const { rows } = await pool.query("SELECT creator_agent_id FROM collections WHERE collection_id = $1", [req.params.id]);
+  if (rows.length === 0) return res.status(404).json({ error: `collection ${req.params.id} not found - either it doesn't exist, or the indexer hasn't processed it yet` });
+  if (rows[0].creator_agent_id !== req.agentAuth.agentId) return res.status(403).json({ error: "only the agent that created this collection can edit its profile" });
+
+  const { errors, values } = validateProfile(req.body);
+  if (errors.length > 0) return res.status(400).json({ error: errors.join("; ") });
+
+  const columns = Object.keys(values); // a fixed whitelist produced by validateProfile, never raw input
+  const sets = columns.map((c, i) => `${c} = $${i + 2}`);
+  try {
+    const { rows: updated } = await pool.query(
+      `UPDATE collections SET ${sets.join(", ")}, profile_updated_at = now() WHERE collection_id = $1
+       RETURNING collection_id, name, symbol, description, image_url, banner_url, external_url, profile_updated_at`,
+      [req.params.id, ...columns.map((c) => values[c])]
+    );
+    res.json(updated[0]);
+  } catch (err) {
+    if (err.code === "23505") return res.status(409).json({ error: "that collection name is already taken" });
+    throw err;
+  }
 });
 
 /// POST /api/collections/:id/verify

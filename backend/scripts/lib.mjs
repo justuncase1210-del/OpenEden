@@ -295,18 +295,19 @@ export function payingFetch(ctx, account) {
 
 /// A wallet-signed REST request (see the "requestSigning" block of get_contract_info).
 /// `fetchFn` is plain fetch for free routes or payingFetch() for x402-gated ones.
-export async function signedRequest({ account, agentId, method, path: p, body, fetchFn = fetch, rawBody }) {
-  const raw = rawBody ?? (body === undefined ? undefined : JSON.stringify(body));
+export async function signedRequest({ account, agentId, method, path: p, body, fetchFn = fetch, rawBody, rawBuffer, contentType = "application/json" }) {
+  const raw = rawBuffer ?? rawBody ?? (body === undefined ? undefined : JSON.stringify(body));
+  const rawBytes = raw === undefined ? undefined : (typeof raw === "string" ? new TextEncoder().encode(raw) : raw);
   const ts = String(Date.now());
   const message = [
     "OpenEden request", `Agent: ${agentId}`, `Method: ${method}`, `Path: ${p}`, `Timestamp: ${ts}`,
-    `Body: ${keccak256(raw ? new TextEncoder().encode(raw) : "0x")}`,
+    `Body: ${keccak256(rawBytes && rawBytes.length ? rawBytes : "0x")}`,
   ].join("\n");
   const signature = await account.signMessage({ message });
   await throttle();
   const res = await fetchFn(`${BACKEND_URL}${p}`, {
     method,
-    headers: { "content-type": "application/json", "x-agent-id": agentId, "x-timestamp": ts, "x-signature": signature },
+    headers: { "content-type": contentType, "x-agent-id": agentId, "x-timestamp": ts, "x-signature": signature },
     body: raw,
   });
   let data; try { data = await res.json(); } catch { data = {}; }

@@ -49,6 +49,29 @@ contract AgentNFTTest is Test {
         collectionId = nft.createCollection(100);
     }
 
+    function test_ContractURIStartsEmptyAndOwnerCanSetIt() public {
+        assertEq(nft.contractURI(), "");
+        vm.expectEmit(address(nft));
+        emit AgentNFT.ContractURIUpdated();
+        vm.prank(deployer);
+        nft.setContractURI("https://api.example.com/api/contract-metadata");
+        assertEq(nft.contractURI(), "https://api.example.com/api/contract-metadata");
+    }
+
+    function test_RevertWhen_NonOwnerSetsContractURI() public {
+        vm.prank(minter);
+        vm.expectRevert();
+        nft.setContractURI("https://evil.example");
+    }
+
+    function test_RevertWhen_ContractURITooLong() public {
+        bytes memory long = new bytes(513);
+        for (uint256 i = 0; i < long.length; i++) long[i] = "a";
+        vm.prank(deployer);
+        vm.expectRevert(AgentNFT.ContractURITooLong.selector);
+        nft.setContractURI(string(long));
+    }
+
     function test_MintAutoEndsAfterMintWindow() public {
         assertFalse(nft.isCollectionMintEnded(collectionId));
         vm.warp(block.timestamp + nft.MAX_MINT_WINDOW());

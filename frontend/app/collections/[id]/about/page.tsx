@@ -15,6 +15,10 @@ type Collection = {
   verified: boolean;
   mint_price_usdc: string;
   created_at: string;
+  name: string | null;
+  symbol: string | null;
+  description: string | null;
+  external_url: string | null;
 };
 
 export default function CollectionAboutPage() {

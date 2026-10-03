@@ -10,6 +10,7 @@ type Listing = {
   price_usdc: string;
   name: string;
   image_url: string;
+  collection_name: string | null;
 };
 
 const PAGE_SIZE = 24;
@@ -52,7 +53,7 @@ export default function ListingsPage() {
             <div className="card-body">
               <div style={{ fontSize: "0.85rem", marginBottom: "0.2rem" }}>{l.name || `Token #${l.token_id}`}</div>
               <a href={`/collections/${l.collection_id}`} className="muted" style={{ fontSize: "0.72rem" }} onClick={(e) => e.stopPropagation()}>
-                Collection #{l.collection_id}
+                {l.collection_name || `Collection #${l.collection_id}`}
               </a>
               <div className="data stat-value" style={{ fontSize: "1rem", marginTop: "0.5rem" }}>${formatUsdc(l.price_usdc)}</div>
             </div>

@@ -62,7 +62,7 @@ Object.assign(process.env, {
   AGENT_REGISTRY_ADDRESS: registry, NFT_CONTRACT_ADDRESS: nft, MARKETPLACE_CONTRACT_ADDRESS: market,
   OFFERS_CONTRACT_ADDRESS: offers, COMMUNITY_REGISTRY_ADDRESS: comm, RELAYER_PRIVATE_KEY: DEPLOYER_KEY,
   INDEXER_START_BLOCK: "0", INDEXER_POLLING_INTERVAL_MS: "500", INDEXER_CONFIRMATIONS: "0", INDEXER_CHUNK_SIZE: "500",
-  REGISTRATIONS_PER_IP_PER_HOUR: "1000", PINATA_JWT: "local-fake-pinata", ADMIN_SECRET: "local-only",
+  REGISTRATIONS_PER_IP_PER_HOUR: "1000", ENABLE_IMAGE_UPLOAD: "true", PINATA_JWT: "local-fake-pinata", ADMIN_SECRET: "local-only",
   IPFS_GATEWAYS: `http://127.0.0.1:${PORT}/ipfs/`,
 });
 
@@ -76,7 +76,14 @@ globalThis.fetch = async (url, init) => {
   if (u.includes("api.pinata.cloud/pinning/pinJSONToIPFS")) {
     const json = JSON.stringify(JSON.parse(init.body).pinataContent);
     const cid = "b" + b32(crypto.createHash("sha256").update(json).digest());
-    pins.set(cid, json);
+    pins.set(cid, { body: json, type: "application/json" });
+    return new Response(JSON.stringify({ IpfsHash: cid }), { status: 200, headers: { "content-type": "application/json" } });
+  }
+  if (u.includes("api.pinata.cloud/pinning/pinFileToIPFS")) {
+    const file = init.body.get("file");
+    const buf = Buffer.from(await file.arrayBuffer());
+    const cid = "b" + b32(crypto.createHash("sha256").update(buf).digest());
+    pins.set(cid, { body: buf, type: file.type });
     return new Response(JSON.stringify({ IpfsHash: cid }), { status: 200, headers: { "content-type": "application/json" } });
   }
   return realFetch(url, init);
@@ -96,6 +103,7 @@ const routers = {
   "/api/watchlist": (await import("../src/routes/watchlist.js")).watchlistRouter,
   "/api/agents": (await import("../src/routes/agents.js")).agentsRouter,
   "/api/activity": (await import("../src/routes/activity.js")).activityRouter,
+  "/api/uploads": (await import("../src/routes/uploads.js")).uploadsRouter,
 };
 
 await pool.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public;");
@@ -103,9 +111,10 @@ await initDb();
 
 const app = express();
 app.set("trust proxy", 1);
+app.post("/api/uploads/image", (req, res, next) => { const ct = (req.get("content-type") || "").split(";")[0].trim().toLowerCase(); if (!["image/png", "image/jpeg", "image/gif", "image/webp"].includes(ct)) return res.status(415).json({ error: "unsupported content type" }); next(); }, express.raw({ type: ["image/png", "image/jpeg", "image/gif", "image/webp"], limit: 5 * 1024 * 1024, verify: (req, res, buf) => { req.rawBody = buf; } }), verifyAgentSignature);
 app.use(express.json({ limit: "100kb", verify: (req, res, buf) => { req.rawBody = buf; } }));
-for (const [m, p] of [["post", "/api/nfts/prepare-metadata"], ["post", "/api/nfts/:tokenId/community"], ["post", "/api/community/metadata"], ["post", "/api/community/post"], ["post", "/api/watchlist"], ["delete", "/api/watchlist/:id"]]) app[m](p, verifyAgentSignature);
-app.get("/ipfs/:cid", (req, res) => (pins.has(req.params.cid) ? res.type("json").send(pins.get(req.params.cid)) : res.status(404).end()));
+for (const [m, p] of [["post", "/api/nfts/prepare-metadata"], ["post", "/api/nfts/:tokenId/community"], ["post", "/api/community/metadata"], ["post", "/api/community/post"], ["post", "/api/collections/:id/profile"], ["post", "/api/watchlist"], ["delete", "/api/watchlist/:id"]]) app[m](p, verifyAgentSignature);
+app.get("/ipfs/:cid", (req, res) => { const p = pins.get(req.params.cid); return p ? res.type(p.type).send(p.body) : res.status(404).end(); });
 app.get("/health", (req, res) => res.json({ ok: true, environment: "local-test" }));
 app.get("/api/contract-info", (req, res) => res.json({
   chainId: 84532, agentRegistryAddress: registry, nftContractAddress: nft, marketplaceContractAddress: market,
@@ -124,7 +133,7 @@ app.get("/sse", async (req, res) => {
   res.on("close", () => transports.delete(transport.sessionId));
   await createMcpServer({
     paidBrowseListings: free, paidGetNft: free, paidListCommunities: free, paidEstimateFloor: free,
-    paidEstimateRarity: free, paidDetectWashTrading: free, paidRegisterAgent: free,
+    paidEstimateRarity: free, paidDetectWashTrading: free, paidRegisterAgent: free, paidLinkWallet: free,
   }, { clientIp: req.ip }).connect(transport);
 });
 app.post("/messages", async (req, res) => {

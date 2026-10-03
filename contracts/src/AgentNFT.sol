@@ -53,6 +53,14 @@ contract AgentNFT is ERC721URIStorage, ERC2981, Ownable2Step, ReentrancyGuard {
 
     address public marketplace;
 
+    /// @notice ERC-7572 contract-level metadata (name, description, image, link) that marketplaces
+    ///         such as OpenSea read for the contract as a whole. Individual collections inside this
+    ///         contract get their own name/image off-chain (see the backend's collection profiles).
+    string private _contractURI;
+    uint256 public constant MAX_CONTRACT_URI_LENGTH = 512;
+    event ContractURIUpdated();
+    error ContractURITooLong();
+
     event CollectionCreated(uint256 indexed collectionId, address indexed creator, string creatorAgentId, uint256 maxSupply);
     event MintEnded(uint256 indexed collectionId);
     event Minted(uint256 indexed tokenId, uint256 indexed collectionId, address indexed to, string agentId, string tokenURI);
@@ -112,6 +120,16 @@ contract AgentNFT is ERC721URIStorage, ERC2981, Ownable2Step, ReentrancyGuard {
         if (_marketplace == address(0)) revert ZeroAddress();
         marketplace = _marketplace;
         emit MarketplaceUpdated(_marketplace);
+    }
+
+    function contractURI() external view returns (string memory) {
+        return _contractURI;
+    }
+
+    function setContractURI(string calldata newContractURI) external onlyOwner {
+        if (bytes(newContractURI).length > MAX_CONTRACT_URI_LENGTH) revert ContractURITooLong();
+        _contractURI = newContractURI;
+        emit ContractURIUpdated();
     }
 
     function createCollection(uint256 maxSupply) external onlyAgent returns (uint256 collectionId) {

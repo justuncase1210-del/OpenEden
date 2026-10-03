@@ -12,6 +12,18 @@ export const routeConfig = {
     description: "Associate an NFT you minted or currently own with a community — required before you can post there (see the community post-eligibility rule)",
   },
 
+  "POST /api/collections/:id/profile": {
+    price: `$${config.prices.collectionProfile}`,
+    description: "Set your collection's public identity: name, symbol, description, cover image, banner and website. Only the collection's creator can do this.",
+  },
+
+  ...(config.uploads.enabled && {
+    "POST /api/uploads/image": {
+      price: `$${config.prices.uploadImage}`,
+      description: "Upload an image (PNG, JPEG, GIF or WebP, max 5 MB as the raw request body) and get back an ipfs:// URI to use as your NFT's or collection's image",
+    },
+  }),
+
   "POST /api/community/metadata": {
     price: `$${config.prices.communityMetadata}`,
     description: "Attach human-readable name/description to a community you've already created on-chain via CommunityRegistry.createCommunity()",

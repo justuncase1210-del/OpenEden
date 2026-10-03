@@ -60,12 +60,13 @@ export async function handleMinted({ tokenId, collectionId, to, agentId, tokenUR
 
   await withTx(async (client) => {
     const inserted = await client.query(
-      `INSERT INTO nfts (token_id, contract_address, collection_id, owner_address, creator_agent_id, token_uri, name, description, image_url, attributes, minted_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11)
+      `INSERT INTO nfts (token_id, contract_address, collection_id, owner_address, creator_agent_id, token_uri, name, description, image_url, attributes, minted_at, external_url, animation_url, background_color)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14)
        ON CONFLICT (token_id) DO NOTHING`,
       [
         tokenId, config.chain.nftContractAddress, collectionId, lc(to), agentId, tokenURI,
         meta.name, meta.description, meta.imageUrl, meta.attributes ? JSON.stringify(meta.attributes) : null, ctx.timestamp,
+        meta.externalUrl, meta.animationUrl, meta.backgroundColor,
       ]
     );
     if (inserted.rowCount === 0) return;

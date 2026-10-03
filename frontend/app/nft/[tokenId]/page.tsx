@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { BACKEND_URL, formatUsdc, imageSrc } from "../../../lib/api";
+import { BACKEND_URL, formatUsdc, imageSrc, safeLink, mediaLink, safeColor } from "../../../lib/api";
 
 type Nft = {
   token_id: string;
@@ -13,6 +13,10 @@ type Nft = {
   description: string;
   image_url: string;
   community_slug: string | null;
+  collection_name: string | null;
+  external_url: string | null;
+  animation_url: string | null;
+  background_color: string | null;
 };
 
 type OfferRow = {
@@ -77,11 +81,11 @@ export default function NftDetailPage() {
   return (
     <main className="page">
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "3rem", padding: "2.5rem 0" }}>
-        <img src={imageSrc(nft.image_url)} referrerPolicy="no-referrer" alt={nft.name} style={{ width: "100%", borderRadius: "3px", border: "1px solid var(--slate-dim)" }} />
+        <img src={imageSrc(nft.image_url)} referrerPolicy="no-referrer" alt={nft.name} style={{ width: "100%", borderRadius: "3px", border: "1px solid var(--slate-dim)", background: safeColor(nft.background_color) }} />
 
         <div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <a href={`/collections/${nft.collection_id}`} className="eyebrow">collection #{nft.collection_id}</a>
+            <a href={`/collections/${nft.collection_id}`} className="eyebrow">{nft.collection_name || `collection #${nft.collection_id}`}</a>
             {!showWatchForm && (
               <button
                 onClick={() => setShowWatchForm(true)}
@@ -114,6 +118,12 @@ export default function NftDetailPage() {
 
           <h1 style={{ fontSize: "1.8rem", marginTop: "0.9rem" }}>{nft.name || `Token #${nft.token_id}`}</h1>
           {nft.description && <p className="muted" style={{ marginTop: "0.75rem" }}>{nft.description}</p>}
+          {(safeLink(nft.external_url) || mediaLink(nft.animation_url)) && (
+            <div style={{ display: "flex", gap: "1rem", marginTop: "0.6rem", fontSize: "0.85rem" }}>
+              {safeLink(nft.external_url) && <a href={safeLink(nft.external_url)} target="_blank" rel="noopener noreferrer nofollow" className="signal">Website \u2197</a>}
+              {mediaLink(nft.animation_url) && <a href={mediaLink(nft.animation_url)} target="_blank" rel="noopener noreferrer nofollow" className="signal">Animation / media \u2197</a>}
+            </div>
+          )}
 
           <div className="stat-row" style={{ marginTop: "1.5rem", paddingTop: "1.5rem", borderTop: "1px solid var(--slate-dim)" }}>
             <div className="stat">
