@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BACKEND_URL, formatUsdc } from "../../lib/api";
+import { BACKEND_URL, formatUsdc, imageSrc } from "../../lib/api";
 
 type Listing = {
   listing_id: string;
@@ -48,7 +48,7 @@ export default function ListingsPage() {
       <div className="grid">
         {listings.map((l) => (
           <a key={l.listing_id} href={`/nft/${l.token_id}`} className="card">
-            <img className="card-thumb" src={l.image_url} alt={l.name} />
+            <img className="card-thumb" src={imageSrc(l.image_url)} referrerPolicy="no-referrer" loading="lazy" alt={l.name} />
             <div className="card-body">
               <div style={{ fontSize: "0.85rem", marginBottom: "0.2rem" }}>{l.name || `Token #${l.token_id}`}</div>
               <a href={`/collections/${l.collection_id}`} className="muted" style={{ fontSize: "0.72rem" }} onClick={(e) => e.stopPropagation()}>

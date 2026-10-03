@@ -11,6 +11,12 @@ contract MockUSDC is ERC20 {
     constructor() ERC20("Mock USDC", "USDC") {}
     function decimals() public pure override returns (uint8) { return 6; }
     function mint(address to, uint256 amount) external { _mint(to, amount); }
+    mapping(address => bool) public blacklisted;
+    function blacklist(address a) external { blacklisted[a] = true; }
+    function _update(address from, address to, uint256 value) internal override {
+        require(!blacklisted[to], "blacklisted");
+        super._update(from, to, value);
+    }
 }
 
 contract MarketplaceTest is Test {
@@ -386,10 +392,100 @@ contract MarketplaceTest is Test {
         vm.prank(seller);
         marketplace.list(tokenId, PRICE);
 
-        vm.prank(deployer);
+        vm.startPrank(deployer);
+        marketplace.pause();
+        vm.warp(block.timestamp + marketplace.EMERGENCY_DELAY());
         marketplace.emergencyWithdrawNft(tokenId, deployer);
+        vm.stopPrank();
 
         assertEq(nft.ownerOf(tokenId), deployer);
+    }
+
+    function test_RevertWhen_EmergencyWithdrawWithoutPause() public {
+        uint256 tokenId = _mintedTokenId();
+        vm.prank(seller);
+        marketplace.list(tokenId, PRICE);
+
+        vm.prank(deployer);
+        vm.expectRevert(Marketplace.EmergencyDelayNotElapsed.selector);
+        marketplace.emergencyWithdrawNft(tokenId, deployer);
+    }
+
+    function test_RevertWhen_EmergencyWithdrawBeforeDelay() public {
+        uint256 tokenId = _mintedTokenId();
+        vm.prank(seller);
+        marketplace.list(tokenId, PRICE);
+
+        vm.startPrank(deployer);
+        marketplace.pause();
+        vm.warp(block.timestamp + marketplace.EMERGENCY_DELAY() - 1);
+        vm.expectRevert(Marketplace.EmergencyDelayNotElapsed.selector);
+        marketplace.emergencyWithdrawNft(tokenId, deployer);
+        vm.stopPrank();
+    }
+
+    function test_SellerCanCancelDuringPauseDelayWindow() public {
+        uint256 tokenId = _mintedTokenId();
+        vm.prank(seller);
+        uint256 listingId = marketplace.list(tokenId, PRICE);
+
+        vm.prank(deployer);
+        marketplace.pause();
+
+        vm.prank(seller);
+        marketplace.cancelListing(listingId);
+        assertEq(nft.ownerOf(tokenId), seller);
+    }
+
+    function test_RevertWhen_SellerBuysOwnListing() public {
+        uint256 tokenId = _mintedTokenId();
+        vm.prank(seller);
+        uint256 listingId = marketplace.list(tokenId, PRICE);
+
+        usdc.mint(seller, PRICE);
+        vm.startPrank(seller);
+        usdc.approve(address(marketplace), PRICE);
+        vm.expectRevert(Marketplace.CannotBuyOwnListing.selector);
+        marketplace.buy(listingId);
+        vm.stopPrank();
+    }
+
+    function test_BuySucceedsAndRoyaltyFallsBackToSellerWhenReceiverBlacklisted() public {
+        address royaltyReceiver = makeAddr("blacklistedRoyaltyReceiver");
+        usdc.blacklist(royaltyReceiver);
+
+        vm.warp(block.timestamp + nft.MIN_MINT_INTERVAL());
+        vm.prank(curator);
+        uint256 collectionId = nft.createCollection(10);
+        vm.prank(seller);
+        uint256 tokenId = nft.mint(collectionId, "ipfs://blacklisted-royalty", royaltyReceiver, 500, NO_MAX);
+        vm.prank(curator);
+        nft.endMint(collectionId);
+
+        vm.startPrank(seller);
+        nft.approve(address(marketplace), tokenId);
+        uint256 listingId = marketplace.list(tokenId, PRICE);
+        vm.stopPrank();
+
+        uint256 sellerBefore = usdc.balanceOf(seller);
+        vm.prank(buyer);
+        marketplace.buy(listingId);
+
+        uint256 fee = (PRICE * marketplace.feeBps()) / 10_000;
+        assertEq(nft.ownerOf(tokenId), buyer);
+        assertEq(usdc.balanceOf(royaltyReceiver), 0);
+        assertEq(usdc.balanceOf(seller), sellerBefore + PRICE - fee);
+    }
+
+    function test_OwnershipTransferIsTwoStep() public {
+        address newOwner = makeAddr("newOwner");
+        vm.prank(deployer);
+        marketplace.transferOwnership(newOwner);
+        assertEq(marketplace.owner(), deployer);
+
+        vm.prank(newOwner);
+        marketplace.acceptOwnership();
+        assertEq(marketplace.owner(), newOwner);
     }
 
     function test_RevertWhen_NonOwnerEmergencyWithdraws() public {

@@ -12,6 +12,12 @@ contract MockUSDC is ERC20 {
     constructor() ERC20("Mock USDC", "USDC") {}
     function decimals() public pure override returns (uint8) { return 6; }
     function mint(address to, uint256 amount) external { _mint(to, amount); }
+    mapping(address => bool) public blacklisted;
+    function blacklist(address a) external { blacklisted[a] = true; }
+    function _update(address from, address to, uint256 value) internal override {
+        require(!blacklisted[to], "blacklisted");
+        super._update(from, to, value);
+    }
 }
 
 contract OffersTest is Test {
@@ -321,7 +327,7 @@ contract OffersTest is Test {
         usdc.approve(address(offersContract), type(uint256).max);
 
         vm.prank(owner_);
-        offersContract.makeOffer(tokenId, OFFER_AMOUNT, 7 days);
+        offersContract.makeOffer(ids[0], OFFER_AMOUNT, 7 days);
         assertEq(marketplace.dailyActionCount(owner_), 10);
 
         vm.warp(block.timestamp + nft.MIN_MINT_INTERVAL());
@@ -383,10 +389,59 @@ contract OffersTest is Test {
         offersContract.makeOffer(tokenId, OFFER_AMOUNT, 7 days);
 
         uint256 deployerBalanceBefore = usdc.balanceOf(deployer);
-        vm.prank(deployer);
+        vm.startPrank(deployer);
+        offersContract.pause();
+        vm.warp(block.timestamp + offersContract.EMERGENCY_DELAY());
         offersContract.emergencyWithdrawUsdc(deployer, OFFER_AMOUNT);
+        vm.stopPrank();
 
         assertEq(usdc.balanceOf(deployer), deployerBalanceBefore + OFFER_AMOUNT);
+    }
+
+    function test_RevertWhen_EmergencyWithdrawBeforeDelay() public {
+        vm.prank(offerer);
+        offersContract.makeOffer(tokenId, OFFER_AMOUNT, 7 days);
+
+        vm.startPrank(deployer);
+        vm.expectRevert(Offers.EmergencyDelayNotElapsed.selector);
+        offersContract.emergencyWithdrawUsdc(deployer, OFFER_AMOUNT);
+
+        offersContract.pause();
+        vm.warp(block.timestamp + offersContract.EMERGENCY_DELAY() - 1);
+        vm.expectRevert(Offers.EmergencyDelayNotElapsed.selector);
+        offersContract.emergencyWithdrawUsdc(deployer, OFFER_AMOUNT);
+        vm.stopPrank();
+    }
+
+    function test_OffererCanCancelDuringPauseDelayWindow() public {
+        vm.prank(offerer);
+        uint256 offerId = offersContract.makeOffer(tokenId, OFFER_AMOUNT, 7 days);
+
+        vm.prank(deployer);
+        offersContract.pause();
+
+        uint256 before = usdc.balanceOf(offerer);
+        vm.prank(offerer);
+        offersContract.cancelOffer(offerId);
+        assertEq(usdc.balanceOf(offerer), before + OFFER_AMOUNT);
+    }
+
+    function test_RevertWhen_OfferOnNonexistentToken() public {
+        vm.prank(offerer);
+        vm.expectRevert();
+        offersContract.makeOffer(9999, OFFER_AMOUNT, 7 days);
+    }
+
+    function test_RevertWhen_OfferOnOwnToken() public {
+        vm.prank(owner_);
+        vm.expectRevert(Offers.CannotOfferOnOwnToken.selector);
+        offersContract.makeOffer(tokenId, OFFER_AMOUNT, 7 days);
+    }
+
+    function test_RevertWhen_OfferDurationTooShort() public {
+        vm.prank(offerer);
+        vm.expectRevert(Offers.DurationTooShort.selector);
+        offersContract.makeOffer(tokenId, OFFER_AMOUNT, 0);
     }
 
     function test_RevertWhen_NonOwnerEmergencyWithdraws() public {

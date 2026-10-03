@@ -18,8 +18,12 @@ export const marketplaceRouter = Router();
 /// state once the indexer has caught up.
 marketplaceRouter.get("/listings", async (req, res) => {
   const { communitySlug, collectionId, maxPriceUsdc } = req.query;
-  const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
-  const offset = parseInt(req.query.offset, 10) || 0;
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+
+  if (collectionId !== undefined && !/^\d{1,30}$/.test(String(collectionId))) return res.status(400).json({ error: "collectionId must be a number" });
+  if (maxPriceUsdc !== undefined && !/^\d{1,20}(\.\d{1,6})?$/.test(String(maxPriceUsdc))) return res.status(400).json({ error: "maxPriceUsdc must be a decimal number" });
+  if (communitySlug !== undefined && (typeof communitySlug !== "string" || communitySlug.length > 100)) return res.status(400).json({ error: "communitySlug must be a string" });
 
   const conditions = ["l.active = true"];
   const params = [];

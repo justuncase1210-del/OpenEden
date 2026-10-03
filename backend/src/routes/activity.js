@@ -4,9 +4,12 @@ import { pool } from "../db.js";
 export const activityRouter = Router();
 
 activityRouter.get("/", async (req, res) => {
-  const limit = Math.min(parseInt(req.query.limit, 10) || 30, 100);
-  const offset = parseInt(req.query.offset, 10) || 0;
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 30, 1), 100);
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
   const { tokenId, collectionId } = req.query;
+  for (const [k, v] of Object.entries({ tokenId, collectionId })) {
+    if (v !== undefined && !/^\d{1,30}$/.test(String(v))) return res.status(400).json({ error: `${k} must be a number` });
+  }
 
   const params = [tokenId || null, collectionId || null, limit, offset];
 

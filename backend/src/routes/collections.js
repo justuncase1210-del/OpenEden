@@ -1,16 +1,25 @@
 import { Router } from "express";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { pool } from "../db.js";
 import { config } from "../config.js";
+import { computeRarity } from "../rarity.js";
 
 export const collectionsRouter = Router();
+
+function safeEqual(provided, expected) {
+  if (typeof provided !== "string") return false;
+  const a = createHash("sha256").update(provided).digest();
+  const b = createHash("sha256").update(expected).digest();
+  return timingSafeEqual(a, b);
+}
 
 /// GET /api/collections?limit=&offset=&mintEnded=
 /// Paginated collection browsing — previously the only way to discover a
 /// collection's existence/state was reading the contract directly via
 /// get_contract_info's bare addresses. Real gap, closed here.
 collectionsRouter.get("/", async (req, res) => {
-  const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
-  const offset = parseInt(req.query.offset, 10) || 0;
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
   const conditions = [];
   const params = [];
 
@@ -43,14 +52,14 @@ collectionsRouter.get("/trending", async (req, res) => {
     WITH current_window AS (
       SELECT n.collection_id, COUNT(*) AS sales, COALESCE(SUM(l.price_usdc), 0) AS volume
       FROM listings l JOIN nfts n ON n.token_id = l.token_id
-      WHERE l.sold_at > now() - ($1 || ' hours')::interval
+      WHERE l.sold_at > now() - make_interval(hours => $1::int)
       GROUP BY n.collection_id
     ),
     prior_window AS (
       SELECT n.collection_id, COUNT(*) AS sales
       FROM listings l JOIN nfts n ON n.token_id = l.token_id
-      WHERE l.sold_at <= now() - ($1 || ' hours')::interval
-        AND l.sold_at > now() - (($1::int * 2) || ' hours')::interval
+      WHERE l.sold_at <= now() - make_interval(hours => $1::int)
+        AND l.sold_at > now() - make_interval(hours => $1::int * 2)
       GROUP BY n.collection_id
     )
     SELECT c.collection_id, c.verified, cw.sales, cw.volume,
@@ -143,33 +152,16 @@ collectionsRouter.get("/:id/stats", async (req, res) => {
 collectionsRouter.get("/:id/traits", async (req, res) => {
   if (!/^\d+$/.test(req.params.id)) return res.status(400).json({ error: "id must be a number" });
   const { rows } = await pool.query(
-    `SELECT token_id, attributes FROM nfts WHERE collection_id = $1 AND attributes IS NOT NULL`,
+    `SELECT token_id, attributes FROM nfts WHERE collection_id = $1 AND attributes IS NOT NULL LIMIT 10000`,
     [req.params.id]
   );
 
   if (rows.length === 0) return res.json({ traitFrequency: {}, tokenRarity: [] });
 
-  const traitCounts = {};
-  for (const row of rows) {
-    for (const attr of row.attributes || []) {
-      traitCounts[attr.trait_type] ??= {};
-      traitCounts[attr.trait_type][attr.value] = (traitCounts[attr.trait_type][attr.value] || 0) + 1;
-    }
-  }
-
-  const totalTokens = rows.length;
-  const tokenRarity = rows.map((row) => {
-    let score = 0;
-    for (const attr of row.attributes || []) {
-      const frequency = traitCounts[attr.trait_type][attr.value] / totalTokens;
-      score += 1 / frequency;
-    }
-    return { tokenId: row.token_id, rarityScore: Math.round(score * 100) / 100 };
-  });
-
-  tokenRarity.sort((a, b) => b.rarityScore - a.rarityScore);
-
-  res.json({ traitFrequency: traitCounts, totalTokensWithTraits: totalTokens, tokenRarity });
+  // Map-based (see rarity.js) - trait names are minter-controlled, so the
+  // old plain-object version allowed prototype pollution via "__proto__".
+  const { traitFrequency, tokenRarity, totalTokens } = computeRarity(rows);
+  res.json({ traitFrequency, totalTokensWithTraits: totalTokens, tokenRarity });
 });
 
 collectionsRouter.get("/:id/price-history", async (req, res) => {
@@ -195,7 +187,7 @@ collectionsRouter.get("/:id/price-history", async (req, res) => {
 /// .env — if it's blank, this route refuses ALL requests (fails closed,
 /// not open).
 collectionsRouter.post("/:id/verify", async (req, res) => {
-  if (!config.adminSecret || req.header("X-Admin-Secret") !== config.adminSecret) {
+  if (!config.adminSecret || !safeEqual(req.header("X-Admin-Secret"), config.adminSecret)) {
     return res.status(403).json({ error: "invalid or missing admin secret" });
   }
   if (!/^\d+$/.test(req.params.id)) return res.status(400).json({ error: "id must be a number" });
@@ -221,7 +213,8 @@ collectionsRouter.get("/:id/offers", async (req, res) => {
     `SELECT o.*, n.name, n.image_url
      FROM offers o JOIN nfts n ON n.token_id = o.token_id
      WHERE n.collection_id = $1 AND o.active = true AND o.expires_at > now()
-     ORDER BY o.amount_usdc DESC`,
+     ORDER BY o.amount_usdc DESC
+     LIMIT 200`,
     [req.params.id]
   );
 
@@ -240,11 +233,13 @@ collectionsRouter.get("/:id/holders", async (req, res) => {
      FROM nfts
      WHERE collection_id = $1
      GROUP BY owner_address
-     ORDER BY token_count DESC`,
+     ORDER BY token_count DESC
+     LIMIT 500`,
     [req.params.id]
   );
 
-  const totalTokens = rows.reduce((sum, r) => sum + parseInt(r.token_count, 10), 0);
+  const { rows: totalRows } = await pool.query("SELECT COUNT(*) FROM nfts WHERE collection_id = $1", [req.params.id]);
+  const totalTokens = parseInt(totalRows[0].count, 10);
   const holders = rows.map((r) => ({
     ownerAddress: r.owner_address,
     tokenCount: parseInt(r.token_count, 10),

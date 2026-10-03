@@ -8,8 +8,8 @@ export const agentsRouter = Router();
 /// directory page, since there was previously no way to discover an
 /// agentId without already knowing it.
 agentsRouter.get("/", async (req, res) => {
-  const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
-  const offset = parseInt(req.query.offset, 10) || 0;
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 100);
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
 
   const { rows } = await pool.query(
     `SELECT agent_id, name, wallet_address, created_at FROM agents ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
@@ -25,15 +25,16 @@ agentsRouter.get("/", async (req, res) => {
 agentsRouter.get("/:agentId/reputation", async (req, res) => {
   const { agentId } = req.params;
 
-  const { rows: agentRows } = await pool.query("SELECT wallet_address, created_at FROM agents WHERE agent_id = $1", [agentId]);
+  const { rows: agentRows } = await pool.query("SELECT created_at FROM agents WHERE agent_id = $1", [agentId]);
   if (agentRows.length === 0) return res.status(404).json({ error: "unknown agentId" });
-  const wallet = agentRows[0].wallet_address;
+  const { rows: walletRows } = await pool.query("SELECT wallet_address FROM agent_wallets WHERE agent_id = $1", [agentId]);
+  const wallets = walletRows.map((r) => r.wallet_address);
 
   const [sales, purchasesViaListing, purchasesViaOffer, collectionsCreated, communityPosts] = await Promise.all([
-    pool.query(`SELECT COUNT(*) FROM listings WHERE seller_address = $1 AND sold_at IS NOT NULL`, [wallet]),
-    pool.query(`SELECT COUNT(*) FROM listings WHERE buyer_address = $1`, [wallet]),
-    pool.query(`SELECT COUNT(*) FROM offers WHERE offerer_address = $1 AND accepted_at IS NOT NULL`, [wallet]),
-    pool.query(`SELECT COUNT(*) FROM collections WHERE creator_wallet = $1`, [wallet]),
+    pool.query(`SELECT COUNT(*) FROM listings WHERE seller_address = ANY($1::text[]) AND sold_at IS NOT NULL`, [wallets]),
+    pool.query(`SELECT COUNT(*) FROM listings WHERE buyer_address = ANY($1::text[])`, [wallets]),
+    pool.query(`SELECT COUNT(*) FROM offers WHERE offerer_address = ANY($1::text[]) AND accepted_at IS NOT NULL`, [wallets]),
+    pool.query(`SELECT COUNT(*) FROM collections WHERE creator_wallet = ANY($1::text[])`, [wallets]),
     pool.query(`SELECT COUNT(*) FROM community_posts WHERE author_agent_id = $1`, [agentId]),
   ]);
 

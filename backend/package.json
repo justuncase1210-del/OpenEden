@@ -6,24 +6,28 @@
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
-    "run:indexer": "node src/indexer-standalone.js"
+    "run:indexer": "node src/indexer-standalone.js",
+    "test": "node --test \"test/*.test.js\""
   },
   "dependencies": {
-    "@coinbase/cdp-sdk": "latest",
-    "@modelcontextprotocol/sdk": "latest",
-    "@x402/core": "latest",
-    "@x402/evm": "latest",
-    "@x402/express": "latest",
-    "@x402/extensions": "latest",
-    "@x402/mcp": "latest",
-    "@x402/svm": "^2.21.0",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "express-rate-limit": "^7.4.1",
-    "multer": "^1.4.5-lts.1",
-    "nanoid": "^5.0.7",
-    "pg": "^8.11.5",
-    "viem": "latest"
+    "@coinbase/cdp-sdk": "1.55.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@x402/core": "2.21.0",
+    "@x402/evm": "2.21.0",
+    "@x402/express": "2.21.0",
+    "@x402/extensions": "2.21.0",
+    "@x402/mcp": "2.21.0",
+    "@x402/svm": "2.21.0",
+    "cors": "2.8.6",
+    "dotenv": "16.6.1",
+    "express": "4.22.2",
+    "express-rate-limit": "7.5.1",
+    "nanoid": "5.1.16",
+    "pg": "8.22.0",
+    "viem": "2.55.10",
+    "zod": "3.25.76"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

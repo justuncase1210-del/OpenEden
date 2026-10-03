@@ -8,7 +8,7 @@ export const pool = new pg.Pool({
   // to from the connection string itself, rather than a separate env
   // var that could drift out of sync with DATABASE_URL.
   ssl: config.db.url.includes("neon.tech") || config.db.url.includes("sslmode=require")
-    ? { rejectUnauthorized: false }
+    ? { rejectUnauthorized: !config.db.sslInsecure }
     : false,
 });
 
@@ -34,6 +34,37 @@ export async function initDb() {
       wallet_address TEXT,
       description TEXT,
       created_at TIMESTAMPTZ DEFAULT now()
+    );
+
+    -- Every wallet an agent has proven control of. wallet_address is the
+    -- primary key (stored lowercase): one wallet can belong to exactly one
+    -- agent, which is what stops link_wallet identity takeovers. Request
+    -- signatures (see auth.js) are checked against THIS table.
+    CREATE TABLE IF NOT EXISTS agent_wallets (
+      wallet_address TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL REFERENCES agents(agent_id),
+      linked_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_wallets_agent_id ON agent_wallets(agent_id);
+    INSERT INTO agent_wallets (wallet_address, agent_id)
+      SELECT DISTINCT ON (lower(wallet_address)) lower(wallet_address), agent_id
+      FROM agents WHERE wallet_address IS NOT NULL
+      ORDER BY lower(wallet_address), created_at ASC
+      ON CONFLICT DO NOTHING;
+
+    -- Single-use request signatures (replay protection). Rows expire.
+    CREATE TABLE IF NOT EXISTS used_signatures (
+      sig_hash TEXT PRIMARY KEY,
+      expires_at TIMESTAMPTZ NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_used_signatures_expires ON used_signatures(expires_at);
+
+    -- Real membership rows, so MemberJoined/MemberLeft replays are
+    -- idempotent and member_count is derived, never incremented blindly.
+    CREATE TABLE IF NOT EXISTS community_members (
+      slug TEXT NOT NULL,
+      wallet_address TEXT NOT NULL,
+      PRIMARY KEY (slug, wallet_address)
     );
 
     CREATE TABLE IF NOT EXISTS collections (
@@ -150,6 +181,17 @@ export async function initDb() {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_watchlist_unique_token ON watchlist_items(agent_id, token_id) WHERE token_id IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_watchlist_unique_collection ON watchlist_items(agent_id, collection_id) WHERE collection_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_watchlist_agent ON watchlist_items(agent_id);
+
+    -- Addresses are compared case-sensitively in SQL; checksum-cased and
+    -- lowercase forms of the same wallet used to silently not match.
+    -- Everything is now stored lowercase (indexer + registration); this
+    -- normalises rows written before that change. Idempotent.
+    UPDATE agents SET wallet_address = lower(wallet_address) WHERE wallet_address IS NOT NULL AND wallet_address <> lower(wallet_address);
+    UPDATE nfts SET owner_address = lower(owner_address) WHERE owner_address <> lower(owner_address);
+    UPDATE listings SET seller_address = lower(seller_address) WHERE seller_address <> lower(seller_address);
+    UPDATE listings SET buyer_address = lower(buyer_address) WHERE buyer_address IS NOT NULL AND buyer_address <> lower(buyer_address);
+    UPDATE offers SET offerer_address = lower(offerer_address) WHERE offerer_address <> lower(offerer_address);
+    UPDATE collections SET creator_wallet = lower(creator_wallet) WHERE creator_wallet IS NOT NULL AND creator_wallet <> lower(creator_wallet);
   `);
   console.log("[db] schema ready");
 }

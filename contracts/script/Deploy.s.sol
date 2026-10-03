@@ -50,6 +50,19 @@ contract Deploy is Script {
         CommunityRegistry communityRegistry = new CommunityRegistry(address(registry));
         console.log("CommunityRegistry deployed at:", address(communityRegistry));
 
+        // KEY SEPARATION. The backend relayer only needs AgentRegistry.registerAgent,
+        // so ONLY the registry goes to the relayer. NFT / Marketplace / Offers (user
+        // escrow + fee config) go to OWNER_ADDRESS - use a multisig. Everything is
+        // Ownable2Step: the new owner must call acceptOwnership().
+        address relayer = vm.envOr("RELAYER_ADDRESS", deployer);
+        address admin = vm.envOr("OWNER_ADDRESS", deployer);
+        if (relayer != deployer) registry.transferOwnership(relayer);
+        if (admin != deployer) {
+            nft.transferOwnership(admin);
+            marketplace.transferOwnership(admin);
+            offers.transferOwnership(admin);
+        }
+
         vm.stopBroadcast();
 
         console.log("\n--- Copy these into backend/.env ---");
@@ -58,10 +71,9 @@ contract Deploy is Script {
         console.log("MARKETPLACE_CONTRACT_ADDRESS=", address(marketplace));
         console.log("OFFERS_CONTRACT_ADDRESS=", address(offers));
         console.log("COMMUNITY_REGISTRY_ADDRESS=", address(communityRegistry));
-        console.log("\nIMPORTANT: the deployer wallet above is now AgentRegistry's owner.");
-        console.log("Set RELAYER_PRIVATE_KEY in backend/.env to the SAME key used here");
-        console.log("(DEPLOYER_PRIVATE_KEY) if you want the backend to be able to call");
-        console.log("registerAgent - or transfer ownership to a separate relayer wallet");
-        console.log("via registry.transferOwnership() and use that key instead.");
+        console.log("\nOWNERSHIP (Ownable2Step - pending until each new owner calls acceptOwnership):");
+        console.log("  AgentRegistry -> RELAYER_ADDRESS (the backend relayer key)");
+        console.log("  AgentNFT / Marketplace / Offers -> OWNER_ADDRESS (use a multisig)");
+        console.log("Set RELAYER_PRIVATE_KEY in backend/.env to the RELAYER key ONLY - never the admin key.");
     }
 }

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { BACKEND_URL, formatUsdc } from "../../../lib/api";
+import { BACKEND_URL, formatUsdc, imageSrc } from "../../../lib/api";
 
 type Item = {
   token_id: string;
@@ -41,7 +41,7 @@ export default function CollectionItemsPage() {
       <div className="grid">
         {items.map((item) => (
           <a key={item.token_id} href={`/nft/${item.token_id}`} className="card">
-            <img className="card-thumb" src={item.image_url || undefined} alt={item.name || `Token #${item.token_id}`} />
+            <img className="card-thumb" src={imageSrc(item.image_url)} referrerPolicy="no-referrer" loading="lazy" alt={item.name || `Token #${item.token_id}`} />
             <div className="card-body">
               <div style={{ fontSize: "0.85rem", marginBottom: "0.4rem" }}>{item.name || `Token #${item.token_id}`}</div>
               {item.price_usdc ? (

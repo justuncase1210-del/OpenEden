@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {ERC721URIStorage} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {ERC2981} from "@openzeppelin/contracts/token/common/ERC2981.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -17,7 +18,7 @@ interface IMarketplaceFeeInfo {
 
 /// @title AgentNFT
 /// @notice ERC-721 collection for NFTs minted by AI agents.
-contract AgentNFT is ERC721URIStorage, ERC2981, Ownable, ReentrancyGuard {
+contract AgentNFT is ERC721URIStorage, ERC2981, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     uint256 private _nextTokenId;
@@ -37,6 +38,13 @@ contract AgentNFT is ERC721URIStorage, ERC2981, Ownable, ReentrancyGuard {
 
     uint256 public constant MAX_COLLECTION_SUPPLY = 10_000;
     uint256 public constant MAX_SANE_MINT_PRICE = 1_000_000 * 1e6;
+
+    /// @notice A collection's mint automatically ends this long after
+    ///         creation. Listing/offers require an ended mint, so without
+    ///         a cap a creator could simply never call endMint() and hold
+    ///         every minted token of the collection untradable forever.
+    uint256 public constant MAX_MINT_WINDOW = 30 days;
+    mapping(uint256 => uint256) public collectionCreatedAt;
 
     mapping(uint256 => Collection) public collections;
     mapping(uint256 => uint256) public tokenCollectionId;
@@ -119,6 +127,7 @@ contract AgentNFT is ERC721URIStorage, ERC2981, Ownable, ReentrancyGuard {
         weeklyCollectionCount[msg.sender] += 1;
 
         collectionId = _nextCollectionId++;
+        collectionCreatedAt[collectionId] = block.timestamp;
         string memory agentId = agentRegistry.agentIdOf(msg.sender);
         collections[collectionId] = Collection({
             creator: msg.sender,
@@ -163,6 +172,7 @@ contract AgentNFT is ERC721URIStorage, ERC2981, Ownable, ReentrancyGuard {
         if (collection.creator == msg.sender) revert CannotMintOwnCollection();
         if (collection.mintedCount >= collection.maxSupply) revert CollectionSoldOut();
         if (collection.mintEndedManually) revert MintAlreadyEnded();
+        if (block.timestamp >= collectionCreatedAt[collectionId] + MAX_MINT_WINDOW) revert MintAlreadyEnded();
         if (royaltyBps > MAX_ROYALTY_BPS) revert RoyaltyTooHigh();
         if (royaltyBps > 0 && royaltyReceiver == address(0)) revert InvalidRoyalty();
         if (block.timestamp < lastMintAt[msg.sender] + MIN_MINT_INTERVAL) revert MintTooSoon();
@@ -203,7 +213,9 @@ contract AgentNFT is ERC721URIStorage, ERC2981, Ownable, ReentrancyGuard {
 
     function isCollectionMintEnded(uint256 collectionId) public view returns (bool) {
         Collection storage collection = collections[collectionId];
-        return collection.mintEndedManually || collection.mintedCount >= collection.maxSupply;
+        return collection.mintEndedManually
+            || collection.mintedCount >= collection.maxSupply
+            || block.timestamp >= collectionCreatedAt[collectionId] + MAX_MINT_WINDOW;
     }
 
     function setActiveListing(uint256 tokenId, uint256 listingId) external onlyMarketplace {

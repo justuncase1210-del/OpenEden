@@ -7,6 +7,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {AgentRegistry} from "./AgentRegistry.sol";
 
@@ -18,7 +19,7 @@ interface IAgentNFTListingTracker {
 
 /// @title Marketplace
 /// @notice Fixed-price listing/buying escrow for the AgentNFT collection, in USDC.
-contract Marketplace is ReentrancyGuard, Ownable, Pausable {
+contract Marketplace is ReentrancyGuard, Ownable2Step, Pausable {
     using SafeERC20 for IERC20;
 
     struct Listing {
@@ -53,6 +54,8 @@ contract Marketplace is ReentrancyGuard, Ownable, Pausable {
     error DailyActionLimitReached();
     error FeeTooHigh();
     error NotOffersContract();
+    error CannotBuyOwnListing();
+    error EmergencyDelayNotElapsed();
     /// @notice Thrown when a critical address parameter is the zero
     ///         address — found by an automated static analysis pass
     ///         (Slither). Without this, an accidental feeRecipient of
@@ -68,6 +71,14 @@ contract Marketplace is ReentrancyGuard, Ownable, Pausable {
     mapping(address => uint256) public dailyActionWindowIndex;
 
     address public offersContract;
+
+    /// @notice Emergency withdrawals are only possible after the contract
+    ///         has been paused for EMERGENCY_DELAY. cancelListing is never
+    ///         pause-gated, so every seller has the whole delay window to
+    ///         pull their own NFT out first - the owner key can no longer
+    ///         silently sweep live escrow.
+    uint256 public constant EMERGENCY_DELAY = 2 days;
+    uint256 public pausedSince;
 
     event OffersContractUpdated(address indexed offersContract);
 
@@ -138,6 +149,7 @@ contract Marketplace is ReentrancyGuard, Ownable, Pausable {
     function buy(uint256 listingId) external onlyAgent dailyActionLimit nonReentrant whenNotPaused {
         Listing storage listing = listings[listingId];
         if (!listing.active) revert NotActive();
+        if (listing.seller == msg.sender) revert CannotBuyOwnListing();
         listing.active = false;
 
         uint256 price = listing.price;
@@ -151,8 +163,10 @@ contract Marketplace is ReentrancyGuard, Ownable, Pausable {
         uint256 fee = (price * feeBps) / 10_000;
         uint256 sellerProceeds = price - fee - royaltyAmount;
 
+        if (royaltyAmount > 0 && !_tryTransferFrom(msg.sender, royaltyReceiver, royaltyAmount)) {
+            sellerProceeds += royaltyAmount;
+        }
         usdc.safeTransferFrom(msg.sender, listing.seller, sellerProceeds);
-        if (royaltyAmount > 0) usdc.safeTransferFrom(msg.sender, royaltyReceiver, royaltyAmount);
         if (fee > 0) usdc.safeTransferFrom(msg.sender, feeRecipient, fee);
 
         agentNFT.transferFrom(address(this), msg.sender, listing.tokenId);
@@ -173,6 +187,19 @@ contract Marketplace is ReentrancyGuard, Ownable, Pausable {
         emit Cancelled(listingId);
     }
 
+
+    /// @dev Best-effort USDC pull used ONLY for the royalty leg. If the
+    ///      royalty receiver can't receive USDC (blacklisted, zero
+    ///      address), the sale must not become un-buyable - the royalty
+    ///      falls back to the seller instead.
+    function _tryTransferFrom(address from, address to, uint256 amount) internal returns (bool) {
+        (bool ok, bytes memory ret) = address(usdc).call(abi.encodeCall(IERC20.transferFrom, (from, to, amount)));
+        if (!ok) return false;
+        if (ret.length == 0) return true;
+        if (ret.length < 32) return false;
+        return abi.decode(ret, (bool));
+    }
+
     function setFee(uint96 _feeBps, address _feeRecipient) external onlyOwner {
         if (_feeBps > MAX_FEE_BPS) revert FeeTooHigh();
         if (_feeRecipient == address(0)) revert ZeroAddress();
@@ -183,18 +210,25 @@ contract Marketplace is ReentrancyGuard, Ownable, Pausable {
 
     function pause() external onlyOwner {
         _pause();
+        pausedSince = block.timestamp;
     }
 
     function unpause() external onlyOwner {
         _unpause();
+        pausedSince = 0;
     }
 
-    function emergencyWithdrawUsdc(address to, uint256 amount) external onlyOwner {
+    modifier emergencyDelayElapsed() {
+        if (pausedSince == 0 || block.timestamp < pausedSince + EMERGENCY_DELAY) revert EmergencyDelayNotElapsed();
+        _;
+    }
+
+    function emergencyWithdrawUsdc(address to, uint256 amount) external onlyOwner emergencyDelayElapsed {
         usdc.safeTransfer(to, amount);
         emit EmergencyWithdrawal(address(usdc), to, amount);
     }
 
-    function emergencyWithdrawNft(uint256 tokenId, address to) external onlyOwner {
+    function emergencyWithdrawNft(uint256 tokenId, address to) external onlyOwner emergencyDelayElapsed {
         agentNFT.transferFrom(address(this), to, tokenId);
         emit EmergencyWithdrawal(address(agentNFT), to, tokenId);
     }

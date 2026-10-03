@@ -10,6 +10,12 @@ contract MockUSDC is ERC20 {
     constructor() ERC20("Mock USDC", "USDC") {}
     function decimals() public pure override returns (uint8) { return 6; }
     function mint(address to, uint256 amount) external { _mint(to, amount); }
+    mapping(address => bool) public blacklisted;
+    function blacklist(address a) external { blacklisted[a] = true; }
+    function _update(address from, address to, uint256 value) internal override {
+        require(!blacklisted[to], "blacklisted");
+        super._update(from, to, value);
+    }
 }
 
 contract AgentNFTTest is Test {
@@ -41,6 +47,32 @@ contract AgentNFTTest is Test {
 
         vm.prank(curator);
         collectionId = nft.createCollection(100);
+    }
+
+    function test_MintAutoEndsAfterMintWindow() public {
+        assertFalse(nft.isCollectionMintEnded(collectionId));
+        vm.warp(block.timestamp + nft.MAX_MINT_WINDOW());
+        assertTrue(nft.isCollectionMintEnded(collectionId));
+
+        vm.prank(minter);
+        vm.expectRevert(AgentNFT.MintAlreadyEnded.selector);
+        nft.mint(collectionId, "ipfs://late", address(0), 0, NO_MAX);
+    }
+
+    function test_MintStillAllowedJustBeforeMintWindow() public {
+        vm.warp(block.timestamp + nft.MAX_MINT_WINDOW() - 1);
+        vm.prank(minter);
+        nft.mint(collectionId, "ipfs://on-time", address(0), 0, NO_MAX);
+    }
+
+    function test_OwnershipTransferIsTwoStep() public {
+        address newOwner = makeAddr("newOwner");
+        vm.prank(deployer);
+        nft.transferOwnership(newOwner);
+        assertEq(nft.owner(), deployer);
+        vm.prank(newOwner);
+        nft.acceptOwnership();
+        assertEq(nft.owner(), newOwner);
     }
 
     function test_CreateCollectionSetsCreatorAndCap() public {

@@ -1,0 +1,68 @@
+# Render Blueprint for the backend (API + MCP server + inline indexer).
+# Render dashboard -> New -> Blueprint -> pick this repo AND the branch you deploy from.
+# Every `sync: false` value is prompted for once in the dashboard and never lives in git.
+services:
+  - type: web
+    name: openeden-backend-v2
+    runtime: node
+    rootDir: backend
+    # `free` sleeps after ~15 min idle (the MCP/SSE connections and the indexer stop while asleep;
+    # the indexer resumes from its saved cursor on wake). Use `starter` for an always-on service.
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: TRUST_PROXY
+        value: "1"
+      # --- chain (Base Sepolia) ---
+      - key: BASE_RPC_URL
+        value: https://sepolia.base.org
+      - key: BASE_CHAIN_ID
+        value: "84532"
+      - key: AGENT_REGISTRY_ADDRESS
+        sync: false
+      - key: NFT_CONTRACT_ADDRESS
+        sync: false
+      - key: MARKETPLACE_CONTRACT_ADDRESS
+        sync: false
+      - key: OFFERS_CONTRACT_ADDRESS
+        sync: false
+      - key: COMMUNITY_REGISTRY_ADDRESS
+        sync: false
+      - key: INDEXER_START_BLOCK
+        sync: false
+      # The RELAYER wallet's key only (owns AgentRegistry). Never the owner/deployer key.
+      - key: RELAYER_PRIVATE_KEY
+        sync: false
+      # --- database (Neon connection string) ---
+      - key: DATABASE_URL
+        sync: false
+      # --- x402 payments (Coinbase CDP) ---
+      - key: CDP_X402_SERVER_ENVIRONMENT
+        value: development
+      - key: CDP_API_KEY_ID
+        sync: false
+      - key: CDP_API_KEY_SECRET
+        sync: false
+      # Plain address that receives payments (can be the OWNER wallet/Safe - no key needed here).
+      - key: X402_PAY_TO_ADDRESS
+        sync: false
+      - key: PRICE_REGISTER_AGENT
+        value: "0.05"
+      # --- CORS: your Vercel domain(s) ---
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: ALLOWED_ORIGIN_PATTERN
+        value: ""
+      # --- admin + integrations ---
+      - key: ADMIN_SECRET
+        generateValue: true
+      - key: PINATA_JWT
+        sync: false
+      - key: FILEBASE_PINNING_TOKEN
+        sync: false
+      - key: DISCORD_WEBHOOK_URL
+        sync: false

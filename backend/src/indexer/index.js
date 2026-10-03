@@ -1,121 +1,151 @@
+import { parseEventLogs } from "viem";
 import { publicClient } from "../chain/viemClient.js";
 import { pool } from "../db.js";
 import { config } from "../config.js";
 import { AGENT_NFT_EVENTS_ABI, MARKETPLACE_EVENTS_ABI, COMMUNITY_REGISTRY_EVENTS_ABI, OFFERS_EVENTS_ABI } from "./abis.js";
-import {
-  handleMinted,
-  handleListed,
-  handleSold,
-  handleCancelled,
-  handleCommunityCreated,
-  handleMemberJoined,
-  handleMemberLeft,
-  handleCollectionCreated,
-  handleMintEnded,
-  handleMintPriceUpdated,
-  handleOfferMade,
-  handleOfferCancelled,
-  handleOfferAccepted,
-} from "./handlers.js";
+import { HANDLERS } from "./handlers.js";
+import { alertOnCrash } from "../monitoring.js";
 
-/// Watches AgentNFT/Marketplace/CommunityRegistry for the events that
-/// actually change state, and keeps Postgres in sync.
+/// ONE ordered event stream across all four contracts.
 ///
-/// RESUME LOGIC (added after initial build): each event stream's
-/// progress is persisted in indexer_state, keyed by "address:eventName".
-/// On restart, backfill resumes from (last persisted block + 1) instead
-/// of always re-scanning from INDEXER_START_BLOCK — the fixed env value
-/// is now only a genuine floor, used the FIRST time a given event stream
-/// is ever seen. This was a known, documented shortcut before; on
-/// mainnet with real activity, always-rescan-everything becomes slow and
-/// eventually a real operational problem, so it's fixed here rather than
-/// left for after launch.
-export async function startIndexer() {
-  const floorBlock = BigInt(config.chain.indexerStartBlock || 0);
-  console.log(`[indexer] starting (floor block ${floorBlock}, resuming from persisted state where available)...`);
+/// The previous design ran an independent backfill + watcher per event
+/// type, which meant a Sold could be applied before the Minted it
+/// belongs to, blocks mined while a long backfill ran were never seen,
+/// one stream's failure silently killed every later stream, and a failed
+/// handler was swallowed while progress was still saved (permanent data
+/// loss). Here:
+///   - logs for every contract are fetched together and applied in
+///     (blockNumber, logIndex) order;
+///   - progress is persisted ONLY after a whole chunk applied cleanly -
+///     any failure retries the same chunk (handlers are idempotent);
+///   - only blocks `indexerConfirmations` deep are read (shallow-reorg
+///     defense), and polling continuously from the persisted cursor means
+///     there is no backfill->watch gap;
+///   - handlers get the block's real timestamp.
+const STATE_KEY = "all-events-v2";
 
-  await backfillAndWatch({ address: config.chain.nftContractAddress, abi: AGENT_NFT_EVENTS_ABI, eventName: "CollectionCreated", floorBlock, onLog: (log) => handleCollectionCreated(log.args) });
-  await backfillAndWatch({ address: config.chain.nftContractAddress, abi: AGENT_NFT_EVENTS_ABI, eventName: "MintEnded", floorBlock, onLog: (log) => handleMintEnded(log.args) });
-  await backfillAndWatch({ address: config.chain.nftContractAddress, abi: AGENT_NFT_EVENTS_ABI, eventName: "MintPriceUpdated", floorBlock, onLog: (log) => handleMintPriceUpdated(log.args) });
-  await backfillAndWatch({ address: config.chain.nftContractAddress, abi: AGENT_NFT_EVENTS_ABI, eventName: "Minted", floorBlock, onLog: (log) => handleMinted(log.args) });
+const EVENTS_ABI = [
+  ...AGENT_NFT_EVENTS_ABI,
+  ...MARKETPLACE_EVENTS_ABI,
+  ...COMMUNITY_REGISTRY_EVENTS_ABI,
+  ...OFFERS_EVENTS_ABI,
+].filter((item) => item.type === "event");
 
-  await backfillAndWatch({ address: config.chain.marketplaceContractAddress, abi: MARKETPLACE_EVENTS_ABI, eventName: "Listed", floorBlock, onLog: (log) => handleListed(log.args) });
-  await backfillAndWatch({ address: config.chain.marketplaceContractAddress, abi: MARKETPLACE_EVENTS_ABI, eventName: "Sold", floorBlock, onLog: (log) => handleSold(log.args) });
-  await backfillAndWatch({ address: config.chain.marketplaceContractAddress, abi: MARKETPLACE_EVENTS_ABI, eventName: "Cancelled", floorBlock, onLog: (log) => handleCancelled(log.args) });
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  await backfillAndWatch({ address: config.chain.communityRegistryAddress, abi: COMMUNITY_REGISTRY_EVENTS_ABI, eventName: "CommunityCreated", floorBlock, onLog: (log) => handleCommunityCreated(log.args) });
-  await backfillAndWatch({ address: config.chain.communityRegistryAddress, abi: COMMUNITY_REGISTRY_EVENTS_ABI, eventName: "MemberJoined", floorBlock, onLog: (log) => handleMemberJoined(log.args) });
-  await backfillAndWatch({ address: config.chain.communityRegistryAddress, abi: COMMUNITY_REGISTRY_EVENTS_ABI, eventName: "MemberLeft", floorBlock, onLog: (log) => handleMemberLeft(log.args) });
-
-  await backfillAndWatch({ address: config.chain.offersContractAddress, abi: OFFERS_EVENTS_ABI, eventName: "OfferMade", floorBlock, onLog: (log) => handleOfferMade(log.args) });
-  await backfillAndWatch({ address: config.chain.offersContractAddress, abi: OFFERS_EVENTS_ABI, eventName: "OfferCancelled", floorBlock, onLog: (log) => handleOfferCancelled(log.args) });
-  await backfillAndWatch({ address: config.chain.offersContractAddress, abi: OFFERS_EVENTS_ABI, eventName: "OfferAccepted", floorBlock, onLog: (log) => handleOfferAccepted(log.args) });
-
-  console.log("[indexer] backfill complete, watching for live events...");
-}
-
-async function getResumeBlock(eventKey, floorBlock) {
-  const { rows } = await pool.query("SELECT last_processed_block FROM indexer_state WHERE event_key = $1", [eventKey]);
+async function getCursor(floorBlock) {
+  const { rows } = await pool.query("SELECT last_processed_block FROM indexer_state WHERE event_key = $1", [STATE_KEY]);
+  // First run of this indexer version deliberately ignores the legacy
+  // per-event cursors and replays from the floor: the handlers are
+  // idempotent, and community_members / buyer_address / block timestamps
+  // only become correct by re-reading history once.
   if (rows.length === 0) return floorBlock;
-  const persisted = BigInt(rows[0].last_processed_block) + 1n;
-  return persisted > floorBlock ? persisted : floorBlock;
+  const next = BigInt(rows[0].last_processed_block) + 1n;
+  return next > floorBlock ? next : floorBlock;
 }
 
-async function saveProgress(eventKey, block) {
+async function saveProgress(block) {
   await pool.query(
     `INSERT INTO indexer_state (event_key, last_processed_block) VALUES ($1, $2)
      ON CONFLICT (event_key) DO UPDATE SET last_processed_block = GREATEST(indexer_state.last_processed_block, EXCLUDED.last_processed_block)`,
-    [eventKey, block.toString()]
+    [STATE_KEY, block.toString()]
   );
 }
 
-async function backfillAndWatch({ address, abi, eventName, floorBlock, onLog }) {
-  if (!address) {
-    console.warn(`[indexer] skipping ${eventName} — contract address not configured`);
+const blockTimeCache = new Map();
+async function getBlockTime(blockNumber) {
+  const key = blockNumber.toString();
+  if (blockTimeCache.has(key)) return blockTimeCache.get(key);
+  const block = await publicClient.getBlock({ blockNumber });
+  const date = new Date(Number(block.timestamp) * 1000);
+  if (blockTimeCache.size > 500) blockTimeCache.clear();
+  blockTimeCache.set(key, date);
+  return date;
+}
+
+async function applyEvent(event) {
+  const handler = HANDLERS[event.eventName];
+  if (!handler) return;
+  const ctx = { timestamp: await getBlockTime(event.blockNumber), blockNumber: event.blockNumber };
+
+  let lastErr;
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    try {
+      await handler(event.args, ctx);
+      return;
+    } catch (err) {
+      lastErr = err;
+      // 23503 = foreign-key violation: the row this event refers to
+      // (e.g. an agent that exists on-chain but not in Postgres) will
+      // never appear by retrying. Skip it LOUDLY rather than wedge the
+      // whole indexer behind one poison event.
+      if (err?.code === "23503") {
+        console.error(`[indexer] SKIPPING ${event.eventName} at block ${event.blockNumber} (foreign-key violation - referenced row missing):`, err.detail || err.message);
+        return;
+      }
+      await sleep(300 * 2 ** (attempt - 1));
+    }
+  }
+  throw lastErr;
+}
+
+export async function startIndexer() {
+  const addresses = [
+    config.chain.nftContractAddress,
+    config.chain.marketplaceContractAddress,
+    config.chain.communityRegistryAddress,
+    config.chain.offersContractAddress,
+  ].filter(Boolean);
+
+  if (addresses.length === 0) {
+    console.warn("[indexer] no contract addresses configured - nothing to index");
     return;
   }
 
-  const eventKey = `${address.toLowerCase()}:${eventName}`;
-  const startBlock = await getResumeBlock(eventKey, floorBlock);
-  const latestBlock = await publicClient.getBlockNumber();
-  const CHUNK_SIZE = BigInt(config.chain.indexerChunkSize || 1_900);
-
-  if (startBlock > floorBlock) {
-    console.log(`[indexer] ${eventName}: resuming from persisted block ${startBlock} (floor was ${floorBlock})`);
-  }
-
+  const floorBlock = BigInt(config.chain.indexerStartBlock || 0);
+  const chunkSize = BigInt(config.chain.indexerChunkSize || 1_900);
   const chunkDelayMs = parseInt(config.chain.indexerChunkDelayMs || "0", 10);
+  const confirmations = BigInt(config.chain.indexerConfirmations);
 
-  for (let from = startBlock; from <= latestBlock; from += CHUNK_SIZE) {
-    const to = from + CHUNK_SIZE - 1n > latestBlock ? latestBlock : from + CHUNK_SIZE - 1n;
-    console.log(`[indexer] ${eventName}: fetching blocks ${from}-${to}...`);
-    const logs = await publicClient.getContractEvents({ address, abi, eventName, fromBlock: from, toBlock: to });
-    for (const log of logs) {
+  let next = await getCursor(floorBlock);
+  console.log(`[indexer] starting at block ${next} (floor ${floorBlock}, ${confirmations} confirmations, ${addresses.length} contracts)`);
+
+  // Runs forever; every failure is caught and retried with backoff so one
+  // bad RPC call or DB blip can never silently stop indexing.
+  (async () => {
+    let backoff = 1_000;
+    for (;;) {
       try {
-        await onLog(log);
+        const head = await publicClient.getBlockNumber();
+        const safeHead = head - confirmations;
+        if (next > safeHead) {
+          await sleep(config.chain.indexerPollingIntervalMs);
+          continue;
+        }
+
+        const to = next + chunkSize - 1n > safeHead ? safeHead : next + chunkSize - 1n;
+        const logs = await publicClient.getLogs({ address: addresses, fromBlock: next, toBlock: to });
+        const events = parseEventLogs({ abi: EVENTS_ABI, logs });
+        events.sort((a, b) => (a.blockNumber === b.blockNumber ? a.logIndex - b.logIndex : a.blockNumber < b.blockNumber ? -1 : 1));
+
+        for (const event of events) await applyEvent(event);
+
+        await saveProgress(to);
+        if (events.length > 0) console.log(`[indexer] blocks ${next}-${to}: applied ${events.length} event(s)`);
+        next = to + 1n;
+        backoff = 1_000;
+
+        if (to < safeHead) {
+          if (chunkDelayMs > 0) await sleep(chunkDelayMs);
+          continue; // still catching up - no idle wait
+        }
+        await sleep(config.chain.indexerPollingIntervalMs);
       } catch (err) {
-        console.error(`[indexer] failed processing backfilled ${eventName} log:`, err);
+        console.error(`[indexer] chunk starting at block ${next} failed, retrying in ${backoff}ms:`, err?.shortMessage || err?.message || err);
+        if (backoff >= 30_000) alertOnCrash(err);
+        await sleep(backoff);
+        backoff = Math.min(backoff * 2, 60_000);
       }
     }
-    await saveProgress(eventKey, to);
-    if (chunkDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, chunkDelayMs));
-  }
-
-  publicClient.watchContractEvent({
-    address,
-    abi,
-    eventName,
-    onLogs: async (logs) => {
-      for (const log of logs) {
-        try {
-          await onLog(log);
-        } catch (err) {
-          console.error(`[indexer] failed processing live ${eventName} log:`, err);
-        }
-        await saveProgress(eventKey, log.blockNumber);
-      }
-    },
-    poll: true,
-    pollingInterval: config.chain.indexerPollingIntervalMs,
-  });
+  })();
 }

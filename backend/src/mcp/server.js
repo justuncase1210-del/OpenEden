@@ -1,11 +1,26 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { isAddress, verifyMessage } from "viem";
+import { isAddress, verifyMessage, recoverMessageAddress } from "viem";
 import { pool } from "../db.js";
 import { nanoid } from "nanoid";
 import { registerAgentOnChain } from "../chain/agentRegistry.js";
 import { buildRegistrationMessage, REGISTRATION_SIGNATURE_MAX_AGE_MS } from "./registrationMessage.js";
 import { config } from "../config.js";
+import { buildLinkAuthorizationMessage } from "../auth.js";
+import { computeRarity } from "../rarity.js";
+
+// per-IP registration cap (in-memory; the global relayer cap in chain/agentRegistry.js still applies)
+const registrationsByIp = new Map();
+function allowRegistration(ip) {
+  const now = Date.now();
+  const recent = (registrationsByIp.get(ip) || []).filter((t) => now - t < 3_600_000);
+  if (recent.length >= config.registration.perIpPerHour) { registrationsByIp.set(ip, recent); return false; }
+  recent.push(now);
+  registrationsByIp.set(ip, recent);
+  if (registrationsByIp.size > 10_000) registrationsByIp.clear();
+  return true;
+}
+const fail = (error) => ({ isError: true, content: [{ type: "text", text: JSON.stringify({ error }) }] });
 
 export function createMcpServer({
   paidBrowseListings,
@@ -14,7 +29,8 @@ export function createMcpServer({
   paidEstimateFloor,
   paidEstimateRarity,
   paidDetectWashTrading,
-}) {
+  paidRegisterAgent = (fn) => fn,
+}, { clientIp = "unknown" } = {}) {
   const server = new McpServer({ name: "ai-nft-marketplace", version: "1.0.0" });
 
   server.tool(
@@ -27,121 +43,87 @@ export function createMcpServer({
       timestamp: z.number().int(),
       signature: z.string(),
     },
-    async ({ name, walletAddress, description, timestamp, signature }) => {
+    paidRegisterAgent(async ({ name, walletAddress, description, timestamp, signature }) => {
+      if (!allowRegistration(clientIp)) return fail("too many registrations from this address - try again later");
+
       const age = Date.now() - timestamp;
       if (age < 0 || age > REGISTRATION_SIGNATURE_MAX_AGE_MS) {
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              error: `timestamp is stale or in the future (must be signed within the last ${REGISTRATION_SIGNATURE_MAX_AGE_MS / 1000}s)`,
-            }),
-          }],
-        };
+        return fail(`timestamp is stale or in the future (must be signed within the last ${REGISTRATION_SIGNATURE_MAX_AGE_MS / 1000}s)`);
       }
-
       const message = buildRegistrationMessage({ walletAddress, timestamp });
       const validSignature = await verifyMessage({ address: walletAddress, message, signature }).catch(() => false);
-      if (!validSignature) {
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              error: "signature verification failed — sign the exact message from get_contract_info's registrationMessageFormat with the private key for walletAddress",
-            }),
-          }],
-        };
+      if (!validSignature) return fail("signature verification failed - sign the exact message from get_contract_info's registrationMessageFormat with the private key for walletAddress");
+
+      // Idempotent per wallet: replaying a captured signature (or retrying after an
+      // on-chain failure) returns the SAME agentId instead of minting a new identity.
+      const wallet = walletAddress.toLowerCase();
+      const { rows: existing } = await pool.query("SELECT agent_id FROM agent_wallets WHERE wallet_address = $1", [wallet]);
+      let agentId = existing[0]?.agent_id;
+      if (!agentId) {
+        agentId = nanoid(12);
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          await client.query("INSERT INTO agents (agent_id, name, wallet_address, description) VALUES ($1, $2, $3, $4)", [agentId, name, wallet, description || null]);
+          await client.query("INSERT INTO agent_wallets (wallet_address, agent_id) VALUES ($1, $2)", [wallet, agentId]);
+          await client.query("COMMIT");
+        } catch (err) {
+          await client.query("ROLLBACK").catch(() => {});
+          throw err;
+        } finally {
+          client.release();
+        }
       }
-
-      const agentId = nanoid(12);
-
-      await pool.query(
-        `INSERT INTO agents (agent_id, name, wallet_address, description) VALUES ($1, $2, $3, $4)`,
-        [agentId, name, walletAddress, description || null]
-      );
 
       try {
         const result = await registerAgentOnChain({ wallet: walletAddress, agentId });
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              agentId,
-              name,
-              walletAddress,
-              onChainRegistration: result.alreadyRegistered
-                ? { success: true, note: "wallet was already registered on-chain — no new transaction needed" }
-                : { success: true, transactionHash: result.transactionHash },
-            }),
-          }],
-        };
+        return { content: [{ type: "text", text: JSON.stringify({ agentId, name, walletAddress, onChainRegistration: result.alreadyRegistered ? { success: true, note: "wallet was already registered on-chain" } : { success: true, transactionHash: result.transactionHash } }) }] };
       } catch (err) {
         console.error("[register_agent] on-chain registration failed:", err);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              agentId,
-              name,
-              walletAddress,
-              onChainRegistration: { success: false, error: err.message },
-              warning: "Agent record created in the database, but on-chain wallet allowlisting FAILED. You will NOT be able to list, buy, create communities, or join communities until this is resolved — those calls will revert with NotAgent(). Contact the marketplace operator or retry registration.",
-            }),
-          }],
-        };
+        return { content: [{ type: "text", text: JSON.stringify({ agentId, name, walletAddress, onChainRegistration: { success: false }, warning: "Agent record saved, but on-chain allowlisting failed. Call register_agent again with a fresh signature to retry - it will reuse this agentId." }) }] };
       }
-    }
+    })
   );
 
   server.tool(
     "link_wallet",
-    "Register an ADDITIONAL wallet under your EXISTING agentId (rather than creating a brand new identity). Requires the same wallet-ownership signature proof as register_agent, signed by the NEW wallet. Free — no payment required. IMPORTANT LIMITATION: on-chain rate limits (collection creation, list+buy, mint cooldown) are tracked PER WALLET, not per agentId — linking a second wallet does NOT share or pool those limits with your first wallet.",
+    "Register an ADDITIONAL wallet under your EXISTING agentId. Requires TWO signatures over the same timestamp: (1) `signature` from the NEW wallet over the register_agent message, and (2) `ownerSignature` from a wallet ALREADY linked to agentId over the link-authorization message (see get_contract_info -> linkAuthorizationFormat). Without (2), anyone who knew a public agentId could attach their wallet to it and impersonate that agent. Free. On-chain rate limits remain PER WALLET.",
     {
-      agentId: z.string(),
+      agentId: z.string().max(64),
       newWalletAddress: z.string().refine(isAddress, { message: "must be a valid checksummed EVM address" }),
       timestamp: z.number().int(),
       signature: z.string(),
+      ownerSignature: z.string(),
     },
-    async ({ agentId, newWalletAddress, timestamp, signature }) => {
-      const { rows } = await pool.query("SELECT 1 FROM agents WHERE agent_id = $1", [agentId]);
-      if (rows.length === 0) {
-        return { content: [{ type: "text", text: JSON.stringify({ error: `unknown agentId "${agentId}" — register first via register_agent` }) }] };
-      }
-
+    async ({ agentId, newWalletAddress, timestamp, signature, ownerSignature }) => {
       const age = Date.now() - timestamp;
-      if (age < 0 || age > REGISTRATION_SIGNATURE_MAX_AGE_MS) {
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({ error: `timestamp is stale or in the future (must be signed within the last ${REGISTRATION_SIGNATURE_MAX_AGE_MS / 1000}s)` }),
-          }],
-        };
-      }
+      if (age < 0 || age > REGISTRATION_SIGNATURE_MAX_AGE_MS) return fail(`timestamp is stale or in the future (must be signed within the last ${REGISTRATION_SIGNATURE_MAX_AGE_MS / 1000}s)`);
 
-      const message = buildRegistrationMessage({ walletAddress: newWalletAddress, timestamp });
-      const validSignature = await verifyMessage({ address: newWalletAddress, message, signature }).catch(() => false);
-      if (!validSignature) {
-        return { content: [{ type: "text", text: JSON.stringify({ error: "signature verification failed — sign the same message format register_agent uses, but with the NEW wallet's key" }) }] };
+      const validNew = await verifyMessage({ address: newWalletAddress, message: buildRegistrationMessage({ walletAddress: newWalletAddress, timestamp }), signature }).catch(() => false);
+      if (!validNew) return fail("signature verification failed - the NEW wallet must sign the register_agent message");
+
+      let ownerWallet;
+      try {
+        ownerWallet = (await recoverMessageAddress({ message: buildLinkAuthorizationMessage({ agentId, newWalletAddress, timestamp }), signature: ownerSignature })).toLowerCase();
+      } catch {
+        return fail("ownerSignature could not be verified");
+      }
+      const { rows: owns } = await pool.query("SELECT 1 FROM agent_wallets WHERE wallet_address = $1 AND agent_id = $2", [ownerWallet, agentId]);
+      if (owns.length === 0) return fail("ownerSignature must come from a wallet already linked to this agentId");
+
+      const newWallet = newWalletAddress.toLowerCase();
+      const ins = await pool.query("INSERT INTO agent_wallets (wallet_address, agent_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [newWallet, agentId]);
+      if (ins.rowCount === 0) {
+        const { rows } = await pool.query("SELECT agent_id FROM agent_wallets WHERE wallet_address = $1", [newWallet]);
+        if (rows[0]?.agent_id !== agentId) return fail("that wallet already belongs to a different agent");
       }
 
       try {
         const result = await registerAgentOnChain({ wallet: newWalletAddress, agentId });
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              agentId,
-              newWalletAddress,
-              onChainRegistration: result.alreadyRegistered
-                ? { success: true, note: "wallet was already registered on-chain" }
-                : { success: true, transactionHash: result.transactionHash },
-              warning: "Rate limits (collections/week, daily list+buy, mint cooldown) remain PER WALLET — this new wallet starts with its own fresh limits, not shared with your other wallet.",
-            }),
-          }],
-        };
+        return { content: [{ type: "text", text: JSON.stringify({ agentId, newWalletAddress, onChainRegistration: result.alreadyRegistered ? { success: true, note: "wallet was already registered on-chain" } : { success: true, transactionHash: result.transactionHash } }) }] };
       } catch (err) {
         console.error("[link_wallet] on-chain registration failed:", err);
-        return { content: [{ type: "text", text: JSON.stringify({ error: err.message }) }] };
+        return fail("wallet linked off-chain, but on-chain allowlisting failed - call link_wallet again to retry");
       }
     }
   );
@@ -218,48 +200,19 @@ export function createMcpServer({
   server.tool(
     "estimate_rarity",
     "Compute a token's rarity score and rank within its collection, using summed-inverse-trait-frequency. Meaningless if the collection's tokens don't have stored attributes. Costs $0.01 USDC.",
-    { tokenId: z.string().max(78) },
+    { tokenId: z.string().regex(/^\d{1,30}$/) },
     paidEstimateRarity(async ({ tokenId }) => {
-      const { rows: tokenRows } = await pool.query("SELECT collection_id, attributes FROM nfts WHERE token_id = $1", [tokenId]);
+      const { rows: tokenRows } = await pool.query("SELECT collection_id FROM nfts WHERE token_id = $1", [tokenId]);
       if (tokenRows.length === 0) return { content: [{ type: "text", text: JSON.stringify({ error: "token not found" }) }] };
       const collectionId = tokenRows[0].collection_id;
 
-      const { rows } = await pool.query(
-        "SELECT token_id, attributes FROM nfts WHERE collection_id = $1 AND attributes IS NOT NULL",
-        [collectionId]
-      );
+      const { rows } = await pool.query("SELECT token_id, attributes FROM nfts WHERE collection_id = $1 AND attributes IS NOT NULL LIMIT 10000", [collectionId]);
       if (rows.length === 0) {
-        return { content: [{ type: "text", text: JSON.stringify({ tokenId, error: "no tokens in this collection have stored attributes — nothing to rank against" }) }] };
+        return { content: [{ type: "text", text: JSON.stringify({ tokenId, error: "no tokens in this collection have stored attributes - nothing to rank against" }) }] };
       }
-
-      const traitCounts = {};
-      for (const row of rows) {
-        for (const attr of row.attributes || []) {
-          traitCounts[attr.trait_type] ??= {};
-          traitCounts[attr.trait_type][attr.value] = (traitCounts[attr.trait_type][attr.value] || 0) + 1;
-        }
-      }
-
-      const totalTokens = rows.length;
-      const scored = rows.map((row) => {
-        let score = 0;
-        for (const attr of row.attributes || []) {
-          const frequency = traitCounts[attr.trait_type][attr.value] / totalTokens;
-          score += 1 / frequency;
-        }
-        return { tokenId: row.token_id, rarityScore: Math.round(score * 100) / 100 };
-      });
-      scored.sort((a, b) => b.rarityScore - a.rarityScore);
-
-      const rank = scored.findIndex((s) => s.tokenId === tokenId) + 1;
-      const entry = scored.find((s) => s.tokenId === tokenId);
-
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({ tokenId, collectionId, rarityScore: entry?.rarityScore ?? null, rank: rank || null, outOf: totalTokens }),
-        }],
-      };
+      const { tokenRarity, totalTokens } = computeRarity(rows);
+      const idx = tokenRarity.findIndex((s) => s.tokenId === tokenId);
+      return { content: [{ type: "text", text: JSON.stringify({ tokenId, collectionId, rarityScore: idx >= 0 ? tokenRarity[idx].rarityScore : null, rank: idx >= 0 ? idx + 1 : null, outOf: totalTokens }) }] };
     })
   );
 
@@ -311,6 +264,11 @@ export function createMcpServer({
         marketplaceContractAddress: config.chain.marketplaceContractAddress,
         communityRegistryAddress: config.chain.communityRegistryAddress,
         offersContractAddress: config.chain.offersContractAddress,
+        requestSigning: {
+          description: "Off-chain write endpoints (prepare-metadata, nfts/:id/community, community/metadata, community/post, watchlist POST/DELETE) require headers X-Agent-Id, X-Timestamp (Date.now() ms, within 5 min) and X-Signature = personal_sign (EIP-191) by a wallet linked to your agentId over the message below. Each signature is single-use.",
+          messageTemplate: "OpenEden request\nAgent: {agentId}\nMethod: {METHOD}\nPath: {path incl. query, e.g. /api/community/post}\nTimestamp: {X-Timestamp}\nBody: {keccak256 of the raw request body bytes, or keccak256(0x) when empty}",
+        },
+        linkAuthorizationFormat: "Authorize linking a new wallet to an OpenEden agent.\nAgent: {agentId}\nNew wallet: {newWalletAddress}\nTimestamp: {timestamp}  (signed by an already-linked wallet; pass as ownerSignature to link_wallet)",
         registrationMessageFormat: {
           template: "Register as an AI NFT Marketplace agent.\\nWallet: {walletAddress}\\nTimestamp: {timestamp}",
           example: buildRegistrationMessage({ walletAddress: "0xYourWalletAddress", timestamp: exampleTimestamp }),

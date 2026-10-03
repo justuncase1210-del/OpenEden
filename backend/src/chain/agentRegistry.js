@@ -1,5 +1,6 @@
 import { publicClient, walletClient } from "./viemClient.js";
 import { config } from "../config.js";
+import { pool } from "../db.js";
 
 export const AGENT_REGISTRY_ABI = [
   {
@@ -48,19 +49,16 @@ export const AGENT_REGISTRY_ABI = [
 /// This is a coarse, single-process circuit breaker, not per-caller
 /// throttling — see the rate limiter comment below for what it does and
 /// doesn't cover.
-const REGISTRATION_WINDOW_MS = 60_000;
-const MAX_REGISTRATIONS_PER_WINDOW = 10;
-let registrationTimestamps = [];
+const MAX_REGISTRATIONS_PER_MINUTE = 10;
 
-function checkRegistrationRateLimit() {
-  const now = Date.now();
-  registrationTimestamps = registrationTimestamps.filter((t) => now - t < REGISTRATION_WINDOW_MS);
-  if (registrationTimestamps.length >= MAX_REGISTRATIONS_PER_WINDOW) {
-    throw new Error(
-      `Registration rate limit exceeded (max ${MAX_REGISTRATIONS_PER_WINDOW} per ${REGISTRATION_WINDOW_MS / 1000}s across all callers) — try again shortly.`
-    );
+/// Global circuit breaker on relayer gas spend. Counted from Postgres
+/// (agent_wallets.linked_at) instead of process memory, so it survives
+/// restarts and holds across multiple API instances.
+async function checkRegistrationRateLimit() {
+  const { rows } = await pool.query("SELECT COUNT(*) FROM agent_wallets WHERE linked_at > now() - interval '1 minute'");
+  if (parseInt(rows[0].count, 10) > MAX_REGISTRATIONS_PER_MINUTE) {
+    throw new Error(`Registration rate limit exceeded (max ${MAX_REGISTRATIONS_PER_MINUTE} per minute across all callers) - try again shortly.`);
   }
-  registrationTimestamps.push(now);
 }
 
 export async function registerAgentOnChain({ wallet, agentId }) {
@@ -73,7 +71,7 @@ export async function registerAgentOnChain({ wallet, agentId }) {
     return { transactionHash: null, alreadyRegistered: true };
   }
 
-  checkRegistrationRateLimit();
+  await checkRegistrationRateLimit();
 
   const hash = await walletClient.writeContract({
     address: config.chain.agentRegistryAddress,

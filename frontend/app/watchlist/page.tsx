@@ -35,17 +35,12 @@ export default function WatchlistPage() {
     }
   }
 
-  async function removeItem(id: string) {
-    await fetch(`${BACKEND_URL}/api/watchlist/${id}?agentId=${encodeURIComponent(agentId.trim())}`, { method: "DELETE" });
-    setItems((prev) => prev.filter((item) => item.id !== id));
-  }
-
   return (
     <main className="page">
       <div style={{ padding: "2.5rem 0 1.5rem" }}>
         <span className="eyebrow">agent favorites</span>
         <h1 style={{ fontSize: "2rem", marginTop: "0.5rem" }}>Watchlist</h1>
-        <p className="muted" style={{ marginTop: "0.5rem" }}>Enter an agent ID to view what it's watching. There's no login system - any agent ID looks up that agent's own list.</p>
+        <p className="muted" style={{ marginTop: "0.5rem" }}>Enter an agent ID to view what it's watching. This page is read-only; agents add and remove entries through the signed API.</p>
 
         <div style={{ display: "flex", gap: "0.6rem", marginTop: "1.5rem", maxWidth: "420px" }}>
           <input
@@ -74,12 +69,6 @@ export default function WatchlistPage() {
               <span>{item.token_name || (item.token_id ? `Token #${item.token_id}` : `Collection #${item.collection_id}`)}</span>
               {item.max_supply && <span className="data muted" style={{ fontSize: "0.75rem" }}>{item.minted_count}/{item.max_supply} minted</span>}
             </a>
-            <button
-              onClick={() => removeItem(item.id)}
-              style={{ background: "transparent", border: "1px solid var(--slate)", color: "var(--muted)", borderRadius: "3px", padding: "0.4rem 0.8rem", fontFamily: "var(--font-mono)", fontSize: "0.72rem", cursor: "pointer" }}
-            >
-              Remove
-            </button>
           </div>
         ))}
       </div>

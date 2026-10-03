@@ -7,6 +7,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {AgentRegistry} from "./AgentRegistry.sol";
 
@@ -23,7 +24,7 @@ interface IMarketplaceShared {
 
 /// @title Offers
 /// @notice Token-specific offers on AgentNFT tokens, escrowed in USDC at creation time.
-contract Offers is ReentrancyGuard, Ownable, Pausable {
+contract Offers is ReentrancyGuard, Ownable2Step, Pausable {
     using SafeERC20 for IERC20;
 
     struct Offer {
@@ -43,6 +44,13 @@ contract Offers is ReentrancyGuard, Ownable, Pausable {
     mapping(uint256 => Offer) public offers;
 
     uint256 public constant MAX_OFFER_DURATION = 30 days;
+    uint256 public constant MIN_OFFER_DURATION = 1 hours;
+
+    /// @notice See Marketplace.EMERGENCY_DELAY - cancelOffer is never
+    ///         pause-gated, so offerers can always pull escrow back out
+    ///         during the delay window.
+    uint256 public constant EMERGENCY_DELAY = 2 days;
+    uint256 public pausedSince;
 
     event OfferMade(uint256 indexed offerId, address indexed offerer, uint256 indexed tokenId, uint256 amount, uint256 expiresAt);
     event OfferCancelled(uint256 indexed offerId);
@@ -52,6 +60,9 @@ contract Offers is ReentrancyGuard, Ownable, Pausable {
     error NotAgent();
     error AmountZero();
     error DurationTooLong();
+    error DurationTooShort();
+    error CannotOfferOnOwnToken();
+    error EmergencyDelayNotElapsed();
     error NotOfferer();
     error NotTokenOwner();
     error OfferExpired();
@@ -86,6 +97,10 @@ contract Offers is ReentrancyGuard, Ownable, Pausable {
     {
         if (amount == 0) revert AmountZero();
         if (duration > MAX_OFFER_DURATION) revert DurationTooLong();
+        if (duration < MIN_OFFER_DURATION) revert DurationTooShort();
+        // ownerOf reverts for nonexistent tokens, so offers can no longer
+        // be made on token IDs that do not exist (escrow nobody could accept).
+        if (agentNFT.ownerOf(tokenId) == msg.sender) revert CannotOfferOnOwnToken();
 
         IMarketplaceShared(marketplace).consumeDailyAction(msg.sender);
 
@@ -137,22 +152,40 @@ contract Offers is ReentrancyGuard, Ownable, Pausable {
         address seller = msg.sender;
         agentNFT.transferFrom(seller, offer.offerer, offer.tokenId);
 
+        if (royaltyAmount > 0 && !_tryTransfer(royaltyReceiver, royaltyAmount)) {
+            sellerProceeds += royaltyAmount;
+        }
         usdc.safeTransfer(seller, sellerProceeds);
-        if (royaltyAmount > 0) usdc.safeTransfer(royaltyReceiver, royaltyAmount);
         if (fee > 0) usdc.safeTransfer(feeRecipient, fee);
 
         emit OfferAccepted(offerId, offer.offerer, amount);
     }
 
+
+    /// @dev Best-effort USDC payout used ONLY for the royalty leg. If the
+    ///      royalty receiver can't receive USDC (blacklisted, zero
+    ///      address), the sale must not become un-buyable - the royalty
+    ///      falls back to the seller instead.
+    function _tryTransfer(address to, uint256 amount) internal returns (bool) {
+        (bool ok, bytes memory ret) = address(usdc).call(abi.encodeCall(IERC20.transfer, (to, amount)));
+        if (!ok) return false;
+        if (ret.length == 0) return true;
+        if (ret.length < 32) return false;
+        return abi.decode(ret, (bool));
+    }
+
     function pause() external onlyOwner {
         _pause();
+        pausedSince = block.timestamp;
     }
 
     function unpause() external onlyOwner {
         _unpause();
+        pausedSince = 0;
     }
 
     function emergencyWithdrawUsdc(address to, uint256 amount) external onlyOwner {
+        if (pausedSince == 0 || block.timestamp < pausedSince + EMERGENCY_DELAY) revert EmergencyDelayNotElapsed();
         usdc.safeTransfer(to, amount);
         emit EmergencyWithdrawal(address(usdc), to, amount);
     }

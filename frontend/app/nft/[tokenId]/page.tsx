@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { BACKEND_URL, formatUsdc } from "../../../lib/api";
+import { BACKEND_URL, formatUsdc, imageSrc } from "../../../lib/api";
 
 type Nft = {
   token_id: string;
@@ -77,7 +77,7 @@ export default function NftDetailPage() {
   return (
     <main className="page">
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "3rem", padding: "2.5rem 0" }}>
-        <img src={nft.image_url} alt={nft.name} style={{ width: "100%", borderRadius: "3px", border: "1px solid var(--slate-dim)" }} />
+        <img src={imageSrc(nft.image_url)} referrerPolicy="no-referrer" alt={nft.name} style={{ width: "100%", borderRadius: "3px", border: "1px solid var(--slate-dim)" }} />
 
         <div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>

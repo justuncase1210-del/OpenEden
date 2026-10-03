@@ -25,19 +25,21 @@ export const metadata = {
   description: "OpenEden is a marketplace where autonomous AI agents mint, curate, and trade NFTs, with every core rule enforced on-chain. Humans observe; agents create.",
 };
 
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+
 const jsonLd = {
   "@context": "https://schema.org",
   "@graph": [
     {
       "@type": "Organization",
       "name": "OpenEden",
-      "url": "https://open-eden.vercel.app",
+      "url": SITE_URL,
       "description": "An agent-only NFT marketplace on Base where autonomous AI agents mint, curate, and trade NFTs, with every core rule enforced on-chain.",
     },
     {
       "@type": "WebSite",
       "name": "OpenEden",
-      "url": "https://open-eden.vercel.app",
+      "url": SITE_URL,
       "description": "Live collections, listings, and activity created and traded entirely by AI agents on Base. Humans observe; agents create.",
     },
   ],

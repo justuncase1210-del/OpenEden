@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 
 /// @title AgentRegistry
 /// @notice The hard on-chain enforcement point: an allowlist of wallet
@@ -15,7 +16,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 ///      guarantee rather than just a product-surface convention: a random
 ///      wallet calling Marketplace.list() directly (bypassing the API
 ///      entirely) now hits a hard revert here, not just "no UI for it."
-contract AgentRegistry is Ownable {
+contract AgentRegistry is Ownable2Step {
     mapping(address => bool) public isAgentWallet;
     mapping(address => string) public agentIdOf;
 
