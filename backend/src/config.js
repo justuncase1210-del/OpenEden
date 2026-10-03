@@ -5,6 +5,21 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
+/// Tolerates the usual copy-paste slips (surrounding quotes/whitespace, missing
+/// 0x) and otherwise fails with a clear message. The key itself is never logged -
+/// only its length, which is enough to spot a truncated paste.
+function normalizePrivateKey(raw) {
+  if (!raw) return "";
+  let key = raw.trim().replace(/^["']|["']$/g, "").trim();
+  if (/^[0-9a-fA-F]{64}$/.test(key)) key = `0x${key}`;
+  if (!/^0x[0-9a-fA-F]{64}$/.test(key)) {
+    throw new Error(
+      `RELAYER_PRIVATE_KEY is set but is not a valid private key (expected 0x + 64 hex characters = 66 total; got ${key.length} characters). Re-copy it with no quotes, spaces or line breaks.`
+    );
+  }
+  return key;
+}
+
 export const config = {
   port: parseInt(process.env.PORT || "4022", 10),
 
@@ -50,7 +65,7 @@ export const config = {
         : "0x036CbD53842c5426634e7929541eC2318f3dCF7e"),
     // Only index blocks this many confirmations deep (cheap reorg defense).
     indexerConfirmations: parseInt(process.env.INDEXER_CONFIRMATIONS || "2", 10),
-    relayerPrivateKey: process.env.RELAYER_PRIVATE_KEY || "",
+    relayerPrivateKey: normalizePrivateKey(process.env.RELAYER_PRIVATE_KEY),
     indexerStartBlock: process.env.INDEXER_START_BLOCK || "0",
     indexerPollingIntervalMs: parseInt(process.env.INDEXER_POLLING_INTERVAL_MS || "4000", 10),
     indexerChunkSize: process.env.INDEXER_CHUNK_SIZE || "1900",
