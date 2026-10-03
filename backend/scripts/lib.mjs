@@ -216,18 +216,41 @@ export async function tx(ctx, account, address, abi, functionName, args = []) {
   const hash = await wallet(account).writeContract({ address, abi, functionName, args });
   const receipt = await ctx.pub.waitForTransactionReceipt({ hash });
   if (receipt.status !== "success") throw new Error(`${functionName} reverted (tx ${hash})`);
+  await waitForVisible(ctx, receipt.blockNumber);
   return receipt;
+}
+
+/// Public RPC endpoints are load-balanced across nodes, and the node that returns a receipt can be a block
+/// ahead of the node that answers the NEXT eth_call / eth_estimateGas. Without this, a read straight after a
+/// write can see the OLD state ("CollectionDoesNotExist" for a collection that was just created).
+export async function waitForVisible(ctx, blockNumber) {
+  if (IS_LOCAL) return;
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    try { if ((await ctx.pub.getBlockNumber()) >= blockNumber) break; } catch { /* retry */ }
+    await sleep(500);
+  }
+  await sleep(2_000); // let the other nodes in the pool catch up as well
 }
 
 /// Assert that a call would revert (simulated - costs nothing, needs no funds).
 export async function expectRevert(ctx, label, account, address, abi, functionName, args, errorName) {
-  try {
-    await ctx.pub.simulateContract({ account, address, abi, functionName, args });
-    bad(`${label}: expected a revert but it would succeed`);
-  } catch (err) {
-    const text = `${err?.shortMessage || ""} ${err?.message || ""} ${err?.cause?.data?.errorName || ""} ${err?.cause?.reason || ""}`;
-    check(!errorName || text.includes(errorName), `${label} -> reverts${errorName ? ` (${errorName})` : ""}`, `${label}: reverted, but not with ${errorName}: ${text.slice(0, 160)}`);
+  let outcome = "no-revert", text = "";
+  // On a live network a lagging RPC node can briefly report stale state, so re-check before failing.
+  for (let attempt = 1; attempt <= (IS_LOCAL ? 1 : 3); attempt++) {
+    try {
+      await ctx.pub.simulateContract({ account, address, abi, functionName, args });
+      outcome = "no-revert";
+    } catch (err) {
+      text = `${err?.shortMessage || ""} ${err?.message || ""} ${err?.cause?.data?.errorName || ""} ${err?.cause?.reason || ""}`;
+      outcome = !errorName || text.includes(errorName) ? "match" : "other-revert";
+    }
+    if (outcome === "match") break;
+    if (attempt < 3 && !IS_LOCAL) await sleep(2_500);
   }
+  if (outcome === "match") ok(`${label} -> reverts${errorName ? ` (${errorName})` : ""}`);
+  else if (outcome === "no-revert") bad(`${label}: expected a revert but it would succeed`);
+  else bad(`${label}: reverted, but not with ${errorName}: ${text.replace(/\s+/g, " ").slice(0, 160)}`);
 }
 
 export const usdcBalance = (ctx, who) => ctx.pub.readContract({ address: ctx.addr.usdc, abi: ABI.usdc, functionName: "balanceOf", args: [who] });
@@ -247,7 +270,8 @@ export async function ensureFunded(ctx, plan) {
     if (ethHave < ethTarget) {
       if (fundEth < ethTarget - ethHave) die(`funder has too little ETH. Send some Base Sepolia ETH to ${ctx.funder.address} (https://portal.cdp.coinbase.com/products/faucet).`);
       const hash = await wallet(ctx.funder).sendTransaction({ to: p.account.address, value: ethTarget - ethHave });
-      await ctx.pub.waitForTransactionReceipt({ hash });
+      const ethReceipt = await ctx.pub.waitForTransactionReceipt({ hash });
+      await waitForVisible(ctx, ethReceipt.blockNumber);
     }
     const usdcTarget = usd(p.usdc || 0);
     const usdcHave = await usdcBalance(ctx, p.account.address);
