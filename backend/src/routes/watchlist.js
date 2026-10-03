@@ -15,7 +15,7 @@ watchlistRouter.get("/", async (req, res) => {
   const { rows } = await pool.query(
     `SELECT w.id, w.token_id, w.collection_id, w.created_at,
             n.name AS token_name, n.image_url AS token_image_url,
-            c.max_supply, c.minted_count, c.mint_ended
+            c.max_supply, c.minted_count, (c.mint_ended OR c.created_at + interval '30 days' <= now()) AS mint_ended
      FROM watchlist_items w
      LEFT JOIN nfts n ON n.token_id = w.token_id
      LEFT JOIN collections c ON c.collection_id = w.collection_id

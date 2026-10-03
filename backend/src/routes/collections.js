@@ -6,6 +6,15 @@ import { computeRarity } from "../rarity.js";
 
 export const collectionsRouter = Router();
 
+// AgentNFT also ends a mint automatically MAX_MINT_WINDOW (30 days) after the
+// collection was created. No event fires when that happens, so the stored
+// mint_ended flag alone goes stale - derive the effective value at read time.
+const MINT_ENDED_SQL = "(mint_ended OR created_at + interval '30 days' <= now())";
+const withEffectiveMintEnded = (row) => {
+  const { mint_ended_effective, ...rest } = row;
+  return { ...rest, mint_ended: mint_ended_effective };
+};
+
 function safeEqual(provided, expected) {
   if (typeof provided !== "string") return false;
   const a = createHash("sha256").update(provided).digest();
@@ -25,19 +34,19 @@ collectionsRouter.get("/", async (req, res) => {
 
   if (req.query.mintEnded !== undefined) {
     params.push(req.query.mintEnded === "true");
-    conditions.push(`mint_ended = $${params.length}`);
+    conditions.push(`${MINT_ENDED_SQL} = $${params.length}`);
   }
 
   const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   params.push(limit, offset);
 
   const { rows } = await pool.query(
-    `SELECT * FROM collections ${whereClause} ORDER BY created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    `SELECT *, ${MINT_ENDED_SQL} AS mint_ended_effective FROM collections ${whereClause} ORDER BY created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   );
   const { rows: countRows } = await pool.query(`SELECT COUNT(*) FROM collections ${whereClause}`, params.slice(0, conditions.length));
 
-  res.json({ collections: rows, total: parseInt(countRows[0].count, 10), limit, offset });
+  res.json({ collections: rows.map(withEffectiveMintEnded), total: parseInt(countRows[0].count, 10), limit, offset });
 });
 
 /// GET /api/collections/trending?window=24h|7d
@@ -79,9 +88,9 @@ collectionsRouter.get("/trending", async (req, res) => {
 
 collectionsRouter.get("/:id", async (req, res) => {
   if (!/^\d+$/.test(req.params.id)) return res.status(400).json({ error: "id must be a number" });
-  const { rows } = await pool.query("SELECT * FROM collections WHERE collection_id = $1", [req.params.id]);
+  const { rows } = await pool.query(`SELECT *, ${MINT_ENDED_SQL} AS mint_ended_effective FROM collections WHERE collection_id = $1`, [req.params.id]);
   if (rows.length === 0) return res.status(404).json({ error: "not found" });
-  res.json(rows[0]);
+  res.json(withEffectiveMintEnded(rows[0]));
 });
 
 /// GET /api/collections/:id/stats
@@ -95,7 +104,7 @@ collectionsRouter.get("/:id/stats", async (req, res) => {
   if (!/^\d+$/.test(req.params.id)) return res.status(400).json({ error: "id must be a number" });
   const collectionId = req.params.id;
 
-  const { rows: collectionRows } = await pool.query("SELECT * FROM collections WHERE collection_id = $1", [collectionId]);
+  const { rows: collectionRows } = await pool.query(`SELECT *, ${MINT_ENDED_SQL} AS mint_ended_effective FROM collections WHERE collection_id = $1`, [collectionId]);
   if (collectionRows.length === 0) return res.status(404).json({ error: "not found" });
 
   const { rows: floorRows } = await pool.query(
@@ -138,7 +147,7 @@ collectionsRouter.get("/:id/stats", async (req, res) => {
     collectionId,
     maxSupply: collectionRows[0].max_supply,
     mintedCount: collectionRows[0].minted_count,
-    mintEnded: collectionRows[0].mint_ended,
+    mintEnded: collectionRows[0].mint_ended_effective,
     floorPriceUsdc: floorRows[0].floor_price,
     topOfferUsdc: topOfferRows[0].top_offer,
     volumeAllTimeUsdc: volumeRows[0].volume_all_time,
