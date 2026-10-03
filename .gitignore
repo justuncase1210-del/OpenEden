@@ -7,3 +7,5 @@ out/
 cache/
 broadcast/
 *.log
+# test-script state
+backend/scripts/.cycle-state.json

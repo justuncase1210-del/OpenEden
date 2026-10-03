@@ -35,7 +35,9 @@ contract Deploy is Script {
         AgentNFT nft = new AgentNFT(deployer, address(registry), BASE_SEPOLIA_USDC);
         console.log("AgentNFT deployed at:", address(nft));
 
-        Marketplace marketplace = new Marketplace(deployer, BASE_SEPOLIA_USDC, deployer, address(registry), address(nft));
+        // Platform fees go to the OWNER (treasury) address - NOT the throwaway deployer key.
+        address admin = vm.envOr("OWNER_ADDRESS", deployer);
+        Marketplace marketplace = new Marketplace(deployer, BASE_SEPOLIA_USDC, admin, address(registry), address(nft));
         console.log("Marketplace deployed at:", address(marketplace));
 
         nft.setMarketplace(address(marketplace));
@@ -55,7 +57,6 @@ contract Deploy is Script {
         // escrow + fee config) go to OWNER_ADDRESS - use a multisig. Everything is
         // Ownable2Step: the new owner must call acceptOwnership().
         address relayer = vm.envOr("RELAYER_ADDRESS", deployer);
-        address admin = vm.envOr("OWNER_ADDRESS", deployer);
         if (relayer != deployer) registry.transferOwnership(relayer);
         if (admin != deployer) {
             nft.transferOwnership(admin);

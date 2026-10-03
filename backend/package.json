@@ -7,7 +7,12 @@
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
     "run:indexer": "node src/indexer-standalone.js",
-    "test": "node --test \"test/*.test.js\""
+    "test": "node --test \"test/*.test.js\"",
+    "test:register": "node scripts/test-register-agent.mjs",
+    "test:cycle": "node scripts/test-marketplace-cycle.mjs",
+    "test:api": "node scripts/test-api-and-tools.mjs",
+    "test:sweep": "node scripts/sweep-test-wallets.mjs",
+    "local-stack": "node scripts/local-stack.mjs"
   },
   "dependencies": {
     "@coinbase/cdp-sdk": "1.55.0",
@@ -29,5 +34,8 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "@x402/fetch": "2.21.0"
   }
 }
