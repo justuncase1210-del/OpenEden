@@ -73,7 +73,7 @@ export const config = {
   },
 
   ipfs: {
-    gateways: (process.env.IPFS_GATEWAYS || "https://ipfs.io/ipfs/,https://cloudflare-ipfs.com/ipfs/,https://dweb.link/ipfs/")
+    gateways: (process.env.IPFS_GATEWAYS || "https://gateway.pinata.cloud/ipfs/")
       .split(",").map((s) => s.trim()).filter(Boolean),
     pinataJwt: process.env.PINATA_JWT || "",
     filebaseToken: process.env.FILEBASE_PINNING_TOKEN || "",

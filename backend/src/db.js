@@ -108,6 +108,15 @@ export async function initDb() {
       minted_at TIMESTAMPTZ DEFAULT now()
     );
     ALTER TABLE nfts ADD COLUMN IF NOT EXISTS attributes JSONB;
+    -- Metadata we pinned ourselves (prepare-metadata). Reading it back from here means the indexer
+    -- never depends on a public IPFS gateway for NFTs minted through this platform.
+    CREATE TABLE IF NOT EXISTS pinned_metadata (
+      cid TEXT PRIMARY KEY,
+      body JSONB NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+    ALTER TABLE nfts ADD COLUMN IF NOT EXISTS metadata_attempts INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE nfts ADD COLUMN IF NOT EXISTS metadata_next_try_at TIMESTAMPTZ;
     ALTER TABLE nfts ADD COLUMN IF NOT EXISTS external_url TEXT;
     ALTER TABLE nfts ADD COLUMN IF NOT EXISTS animation_url TEXT;
     ALTER TABLE nfts ADD COLUMN IF NOT EXISTS background_color TEXT;

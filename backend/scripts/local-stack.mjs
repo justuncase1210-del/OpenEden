@@ -69,20 +69,21 @@ Object.assign(process.env, {
 // ---- fake Pinata + IPFS gateway (so prepare-metadata and the indexer's metadata fetch are exercised) ----
 import crypto from "node:crypto";
 const pins = new Map();
+const cidV1 = (digest) => "b" + b32(Buffer.concat([Buffer.from([0x01, 0x55, 0x12, 0x20]), digest]));
 const b32 = (buf) => { const A = "abcdefghijklmnopqrstuvwxyz234567"; let bits = 0, val = 0, out = ""; for (const byte of buf) { val = (val << 8) | byte; bits += 8; while (bits >= 5) { out += A[(val >>> (bits - 5)) & 31]; bits -= 5; } } if (bits > 0) out += A[(val << (5 - bits)) & 31]; return out; };
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, init) => {
   const u = String(url);
   if (u.includes("api.pinata.cloud/pinning/pinJSONToIPFS")) {
     const json = JSON.stringify(JSON.parse(init.body).pinataContent);
-    const cid = "b" + b32(crypto.createHash("sha256").update(json).digest());
+    const cid = cidV1(crypto.createHash("sha256").update(json).digest());
     pins.set(cid, { body: json, type: "application/json" });
     return new Response(JSON.stringify({ IpfsHash: cid }), { status: 200, headers: { "content-type": "application/json" } });
   }
   if (u.includes("api.pinata.cloud/pinning/pinFileToIPFS")) {
     const file = init.body.get("file");
     const buf = Buffer.from(await file.arrayBuffer());
-    const cid = "b" + b32(crypto.createHash("sha256").update(buf).digest());
+    const cid = cidV1(crypto.createHash("sha256").update(buf).digest());
     pins.set(cid, { body: buf, type: file.type });
     return new Response(JSON.stringify({ IpfsHash: cid }), { status: 200, headers: { "content-type": "application/json" } });
   }

@@ -5,6 +5,7 @@ import { config } from "../config.js";
 import { AGENT_NFT_EVENTS_ABI, MARKETPLACE_EVENTS_ABI, COMMUNITY_REGISTRY_EVENTS_ABI, OFFERS_EVENTS_ABI } from "./abis.js";
 import { HANDLERS } from "./handlers.js";
 import { alertOnCrash } from "../monitoring.js";
+import { retryMissingMetadata } from "./metadata.js";
 
 /// ONE ordered event stream across all four contracts.
 ///
@@ -106,6 +107,9 @@ export async function startIndexer() {
   let chunkSize = BigInt(config.chain.indexerChunkSize || 900);
   const chunkDelayMs = parseInt(config.chain.indexerChunkDelayMs || "0", 10);
   const confirmations = BigInt(config.chain.indexerConfirmations);
+
+  // NFTs whose metadata could not be fetched at mint time are retried with a growing delay.
+  setInterval(() => retryMissingMetadata().catch((err) => console.warn("[indexer] metadata retry failed:", err.message)), 60_000).unref();
 
   let next = await getCursor(floorBlock);
   console.log(`[indexer] starting at block ${next} (floor ${floorBlock}, ${confirmations} confirmations, ${addresses.length} contracts)`);

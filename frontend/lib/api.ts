@@ -1,3 +1,7 @@
+// ipfs.io and most public gateways no longer serve images to <img> tags (service-worker-only / bot checks).
+// Pinata's gateway does; for production use your own dedicated gateway (Pinata -> Gateways) and set this.
+export const IPFS_GATEWAY = (process.env.NEXT_PUBLIC_IPFS_GATEWAY || "https://gateway.pinata.cloud/ipfs/").replace(/\/?$/, "/");
+
 export const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:4022";
 
 export function formatUsdc(value: string | number | null | undefined): string {
@@ -12,7 +16,7 @@ export function formatUsdc(value: string | number | null | undefined): string {
 /// other scheme (javascript:, data:, http:) is dropped.
 export function imageSrc(url: string | null | undefined): string | undefined {
   if (!url) return undefined;
-  if (url.startsWith("ipfs://")) return `https://ipfs.io/ipfs/${url.slice("ipfs://".length)}`;
+  if (url.startsWith("ipfs://")) return `${IPFS_GATEWAY}${url.slice("ipfs://".length)}`;
   if (url.startsWith("https://")) return url;
   return undefined;
 }
@@ -26,7 +30,7 @@ export function safeLink(url: string | null | undefined): string | undefined {
 /// animation_url may be ipfs:// or https://; both open through a normal https link.
 export function mediaLink(url: string | null | undefined): string | undefined {
   if (!url) return undefined;
-  if (url.startsWith("ipfs://")) return `https://ipfs.io/ipfs/${url.slice("ipfs://".length)}`;
+  if (url.startsWith("ipfs://")) return `${IPFS_GATEWAY}${url.slice("ipfs://".length)}`;
   return safeLink(url);
 }
 

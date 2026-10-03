@@ -38,6 +38,8 @@ nftsRouter.post("/prepare-metadata", consumeSignature, async (req, res) => {
   if (attributes !== undefined) metadata.attributes = sanitizeAttributes(attributes) ?? [];
 
   const { cid, tokenUri } = await pinMetadataToIpfs(metadata);
+  // keep a copy so the indexer never has to fetch this back through a public gateway
+  await pool.query("INSERT INTO pinned_metadata (cid, body) VALUES ($1, $2::jsonb) ON CONFLICT DO NOTHING", [cid, JSON.stringify(metadata)]);
   res.json({
     tokenUri,
     cid,

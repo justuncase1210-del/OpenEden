@@ -88,7 +88,7 @@ async function main() {
   // wallet-signature verification per request, a bigger change.
   const agentWriteLimiter = rateLimit({
     windowMs: 60_000,
-    limit: 20,
+    limit: 60, // a paid call is two requests (the 402 challenge + the paid retry)
     standardHeaders: true,
     legacyHeaders: false,
     // Keyed on the VERIFIED agent (signature checked above), never a caller-supplied

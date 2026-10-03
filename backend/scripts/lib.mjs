@@ -335,6 +335,11 @@ export async function signedRequest({ account, agentId, method, path: p, body, f
     body: raw,
   });
   let data; try { data = await res.json(); } catch { data = {}; }
+  // rate-limited before the signature was consumed -> safe to sign a fresh request and try again
+  if (res.status === 429 && !IS_LOCAL && (arguments[0]._retries ?? 0) < 3) {
+    await sleep(20_000);
+    return signedRequest({ ...arguments[0], _retries: (arguments[0]._retries ?? 0) + 1 });
+  }
   return { status: res.status, data };
 }
 
