@@ -4,7 +4,7 @@
 //   buyer    - buys one NFT, and makes / cancels / has accepted offers on the other
 //
 //   cd backend
-//   $env:TEST_FUNDER_PRIVATE_KEY="0x..."     # throwaway wallet with ~0.005 Base Sepolia ETH and ~$5 testnet USDC
+//   $env:TEST_FUNDER_PRIVATE_KEY="0x..."     # throwaway wallet with ~0.002 Base Sepolia ETH and ~$5 testnet USDC
 //   node scripts/test-marketplace-cycle.mjs
 //   node scripts/test-api-and-tools.mjs      # second half: indexer, REST, MCP tools, communities, watchlist
 //
@@ -33,9 +33,9 @@ for (const [k, a] of Object.entries({ funder: ctx.funder, curator, minter, buyer
 // --------------------------------------------------------------------------------------------- 0
 step("0. Fund the test wallets (only tops up what's missing)");
 await ensureFunded(ctx, [
-  { account: curator, eth: "0.0006", usdc: 0.30 },
-  { account: minter, eth: "0.0008", usdc: 1.00 },
-  { account: buyer, eth: "0.0008", usdc: 2.50 },
+  { account: curator, eth: "0.0002", usdc: 0.30 },
+  { account: minter, eth: "0.0003", usdc: 1.00 },
+  { account: buyer, eth: "0.0003", usdc: 2.50 },
 ]);
 ok("curator, minter and buyer funded");
 

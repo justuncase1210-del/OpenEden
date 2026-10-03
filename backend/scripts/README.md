@@ -13,7 +13,7 @@ All of these use **throwaway test wallets** on Base Sepolia (or a local fake cha
 ## Against the live testnet deployment
 ```powershell
 cd backend
-$env:TEST_FUNDER_PRIVATE_KEY="0x..."   # throwaway wallet: ~0.005 Base Sepolia ETH + ~$5 test USDC (faucet.circle.com)
+$env:TEST_FUNDER_PRIVATE_KEY="0x..."   # throwaway wallet: ~0.002 Base Sepolia ETH + ~$5 test USDC (faucet.circle.com)
 node scripts/test-marketplace-cycle.mjs
 node scripts/test-api-and-tools.mjs
 node scripts/sweep-test-wallets.mjs

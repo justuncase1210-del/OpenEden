@@ -24,9 +24,9 @@ console.log(`  backend: ${BACKEND_URL}   run: ${RUN}   collection #${collectionI
 if (st.backend !== BACKEND_URL) warn(`saved state is from ${st.backend}, but BACKEND_URL is ${BACKEND_URL}`);
 
 await ensureFunded(ctx, [
-  { account: curator, eth: "0.0006", usdc: 0.25 },
-  { account: minter, eth: "0.0006", usdc: 0.25 },
-  { account: buyer, eth: "0.0006", usdc: 0.40 },
+  { account: curator, eth: "0.0002", usdc: 0.25 },
+  { account: minter, eth: "0.0002", usdc: 0.25 },
+  { account: buyer, eth: "0.0002", usdc: 0.40 },
 ]);
 
 // --------------------------------------------------------------------------------------------- 1
